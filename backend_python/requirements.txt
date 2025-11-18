@@ -1,1 +1,13 @@
 # python requirements
+fastapi
+uvicorn[standard]
+pydantic
+redis
+celery
+pymongo
+requests
+aiohttp
+beautifulsoup4
+scrapy
+elasticsearch
+python-dotenv
