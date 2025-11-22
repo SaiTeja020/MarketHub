@@ -74,4 +74,9 @@ button:focus-visible {
   button {
     background-color: #f9f9f9;
   }
+
+  input, textarea, select {
+  color: #111 !important;
+  }
+
 }
