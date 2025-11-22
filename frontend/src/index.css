@@ -1,3 +1,5 @@
+@import "tailwindcss";
+
 :root {
   font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
   line-height: 1.5;
@@ -11,6 +13,10 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+
+  --card-bg: #ffffff;
+  --muted: #6b7280; /* tailwind gray-500 */
+  --accent: #06b6d4; /* cyan-500 if needed */
 }
 
 a {
@@ -28,6 +34,9 @@ body {
   place-items: center;
   min-width: 320px;
   min-height: 100vh;
+  background: #f6f8fb; /* light background similar to screenshot */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 h1 {
