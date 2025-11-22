@@ -6,7 +6,6 @@ export const useUserStore = create(
         (set) => ({
             userId: null,
             email: null,
-            role: null,
             jwt: null,
 
             // Set user after login
@@ -15,7 +14,6 @@ export const useUserStore = create(
                 set({
                     userId: payload.userId,
                     email: payload.email,
-                    role: payload.role,
                     jwt: payload.jwt
                 }),
 
@@ -25,7 +23,6 @@ export const useUserStore = create(
                 set({
                     userId: null,
                     email: null,
-                    role: null,
                     jwt: null
                 }),
         }),
