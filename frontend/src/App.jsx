@@ -29,6 +29,7 @@ function App() {
     }, []);
 
     return (
+        <BrowserRouter>
         <Routes>
             <Route path="/login" element={<Login />} />
             <Route
@@ -69,12 +70,13 @@ function App() {
                 element={
                     <RequireAuth>
                         <Layout>
-                            <ProductPage />
+                            <ProductPage/>
                         </Layout>
                     </RequireAuth>
                 }
             />
         </Routes>
+        </BrowserRouter>
     );
 }
 

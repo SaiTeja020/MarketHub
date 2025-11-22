@@ -2,10 +2,10 @@ import { useState } from "react";
 import { useUserStore } from "../store/useUserStore.js";
 import { supabase } from "../lib/supabase.js";
 
-export default function login() {
+export default function Login() {
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
-    const setUser = setUser((s) => s.setUser);
+    const setUser = useUserStore((s) => s.setUser);
 
     async function handleLogin(e){
         e.preventDefault();
