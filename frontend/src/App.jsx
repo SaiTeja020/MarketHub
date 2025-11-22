@@ -12,13 +12,13 @@ import ProductPage from "./pages/ProductPage.jsx";
 import TrackerPage from "./pages/TrackerPage.jsx";
 import AnalyticsPage from "./pages/AnalyticsPage.jsx";
 
-function App(){
-    useEffect(() =>{
-        const { data: listener } =supabase.auth.onAuthStateChange(
-            (event, session) =>{
-                if(event === "TOKEN_REFRESHED" && session){
+function App() {
+    useEffect(() => {
+        const { data: listener } = supabase.auth.onAuthStateChange(
+            (event, session) => {
+                if (event === "TOKEN_REFRESHED" && session) {
                     useUserStore.getState().setUser({
-                        ...useUserStore.getState(),
+                        ...useUserStore.getState().user,
                         jwt: session.access_token
                     });
                 }
@@ -28,55 +28,53 @@ function App(){
         return () => listener.subscription.unsubscribe();
     }, []);
 
-    return(
-        <BrowserRouter>
-            <Routes>
-                <Route path ="/login" element = {<login />} />
-                <Route
-                    path = '/'
-                    element = {
-                        <RequireAuth>
-                            <Layout>
-                                <Home />
-                            </Layout>
-                        </RequireAuth>
-                    }
-                />
+    return (
+        <Routes>
+            <Route path="/login" element={<Login />} />
+            <Route
+                path='/'
+                element={
+                    <RequireAuth>
+                        <Layout>
+                            <Home />
+                        </Layout>
+                    </RequireAuth>
+                }
+            />
 
-                <Route
-                    path = "/tracker"
-                    element = {
-                        <RequireAuth>
-                            <Layout>
-                                <TrackerPage />
-                            </Layout>
-                        </RequireAuth>
-                    }
-                />
+            <Route
+                path="/tracker"
+                element={
+                    <RequireAuth>
+                        <Layout>
+                            <TrackerPage />
+                        </Layout>
+                    </RequireAuth>
+                }
+            />
 
-                <Routegi
-                    path = "/analytics"
-                    element = {
-                        <RequireAuth>
-                            <Layout>
-                                <AnalyticsPage />
-                            </Layout>
-                        </RequireAuth>
-                    }
-                />
+            <Route
+                path="/analytics"
+                element={
+                    <RequireAuth>
+                        <Layout>
+                            <AnalyticsPage />
+                        </Layout>
+                    </RequireAuth>
+                }
+            />
 
-                <Route
-                    path = "/product/:id"
-                    element = {
-                        <RequireAuth>
-                            <Layout>
-                                <ProductPage />
-                            </Layout>
-                        </RequireAuth>
-                    }
-                />
-            </Routes>
-        </BrowserRouter>
+            <Route
+                path="/product/:id"
+                element={
+                    <RequireAuth>
+                        <Layout>
+                            <ProductPage />
+                        </Layout>
+                    </RequireAuth>
+                }
+            />
+        </Routes>
     );
 }
 
