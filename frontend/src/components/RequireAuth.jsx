@@ -1,10 +1,27 @@
 import {  Navigate } from "react-router-dom";
-import { useUserStore } from "../store/useUserStore.js";
+import { useEffect, useState } from "react";
+import { supabase } from "../lib/supabase";
 
 export default function requireAuth({children}){
-    const jwt = useUserStore((s) => s.jwt);
+    const [loading, setLoading] = useState(true);
+    const [authenticated, setAuthenticated] = useState(false);
 
-    if(!jwt) return <Navigate to="/login" replace />;
+    useEffect(() =>{
+        const checkUser = async () =>{
+            const {data : {user}} = await supabase.auth.getUser();
 
-    return children;
+            if(user){
+                setAuthenticated(true);
+            }
+            else{
+                setAuthenticated(false);
+            }
+            setLoading(false);
+        };
+        checkUser();
+    }, []);
+
+    if(loading)return null;
+
+    return authenticated ? children : <Navigate to="/login" />;
 }
