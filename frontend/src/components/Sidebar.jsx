@@ -13,7 +13,7 @@ export default function Sidebar(){
 
     return(
         <aside className = "w-64 bg-white shadow-md p-6 flex-col border-r">
-            <h1 className = "text2x1 font-bold mb-10">MarketHub</h1>
+            <h1 className = "text-2x1 font-bold mb-10">MarketHub</h1>
             <nav className = "flex flex-col gap-4 flex-1">
                 {navItems.map((item) =>(
                     <Link
