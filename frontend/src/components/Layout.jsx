@@ -75,7 +75,7 @@ export default function Layout({ children }) {
         <div className="p-4 mt-auto">
           <button
             onClick={handleLogout}
-            className="flex items-center space-x-3 text-gray-600 hover:text-gray-900 text-sm font-medium transition"
+            className="flex items-center space-x-3 text-white-600 hover:text-gray-900 text-sm font-medium transition"
           >
             {/* Correct logout icon: arrow exiting a door */}
             <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none"
