@@ -169,8 +169,8 @@ export default function SignUpPage() {
                                         id="password"
                                         type={showPassword ? "text" : "password"}
                                         placeholder="Enter your password"
-                                        value={repassword}
-                                        onChange={(e) => setRepassword(e.target.value)}
+                                        value={password}
+                                        onChange={(e) => setPassword(e.target.value)}
                                         required
                                         className="pl-10 block w-full border-gray-300 rounded-lg bg-gray-50 border 
                                                    focus:ring-blue-500 focus:border-blue-500 p-2.5 text-sm text-gray-900"
