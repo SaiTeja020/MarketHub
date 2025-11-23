@@ -11,6 +11,7 @@ import Home from "./pages/Home.jsx";
 import ProductPage from "./pages/ProductPage.jsx";
 import TrackerPage from "./pages/TrackerPage.jsx";
 import AnalyticsPage from "./pages/AnalyticsPage.jsx";
+import SignUpPage from "./pages/SignUpPage.jsx";
 
 function App() {
     useEffect(() => {
@@ -74,6 +75,11 @@ function App() {
                         </Layout>
                     </RequireAuth>
                 }
+            />
+
+            <Route
+                path="/signup"
+                element={<SignUpPage />}
             />
         </Routes>
         </BrowserRouter>
