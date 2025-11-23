@@ -39,7 +39,7 @@ export default function Login() {
         <div className="bg-loginpage-bg bg-cover bg-center h-screen w-full">
             <div className="h-full w-full bg-black/40">
                 {/* Main layout: left logo section + right form section */}
-                <div className="min-h-screen flex items-center justify-between px-24">
+                <div className="min-h-screen w-full flex items-center justify-between px-24">
 
                     {/* LEFT: Brand / Logo */}
                     <div className="text-white space-y-6">
@@ -104,7 +104,7 @@ export default function Login() {
                                         value={email}
                                         onChange={(e) => setEmail(e.target.value)}
                                         required
-                                        className="pl-10 block w-full border-gray-300 rounded-lg bg-gray-50 border focus:ring-blue-500 focus:border-blue-500 p-2.5 text-sm"
+                                        className="pl-10 block w-full border-gray-300 rounded-lg bg-gray-50 border focus:ring-blue-500 focus:border-blue-500 p-2.5 text-sm text-gray-900"
                                     />
                                 </div>
                             </div>
@@ -140,7 +140,7 @@ export default function Login() {
                                         value={password}
                                         onChange={(p) => setPassword(p.target.value)}
                                         required
-                                        className="pl-10 block w-full border-gray-300 rounded-lg bg-gray-50 border focus:ring-blue-500 focus:border-blue-500 p-2.5 text-sm"
+                                        className="pl-10 block w-full border-gray-300 rounded-lg bg-gray-50 border focus:ring-blue-500 focus:border-blue-500 p-2.5 text-sm text-gray-900"
                                     />
                                     <div
                                         className="absolute inset-y-0 right-0 pr-3 flex items-center cursor-pointer"
