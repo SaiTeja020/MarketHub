@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo } from "react";
 import { supabase } from "../lib/supabase.js";
 import { useNavigate } from "react-router-dom";
-import { LineChart, Line, XAcis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
+import { LineChart, Line, XAcis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Area, AreaChart } from "recharts";
 
 export default function TrackerPage() {
   const navigate = useNavigate();
@@ -76,7 +76,18 @@ export default function TrackerPage() {
   }, []);
 
   // Map price history by product id for quick lookup
-  const historyByProduct = useMemo(() =>{})
+  const historyByProduct = useMemo(() =>{
+    const map = {};
+    for(const r of priceHistories){
+      if(!map[r.product_id]) map[r.product_id] = [];
+      map[r.product_id].push(r);
+    }
+    return map;
+  }, [priceHistories]);
+
+  const visibleProducts = useMemo(() =>{
+    
+  })
 }
 /**
  * MyTracker.jsx
