@@ -26,7 +26,13 @@ import {
  * - Add product currently prompts for a URL and title and inserts a stub product; your scraping worker should pick it up.
  */
 
-const PLACEHOLDER_IMAGE = "/mnt/data/8c385096-2f52-4bef-bb65-ad4ebb2ed7f2.png";
+function safeHost(url) {
+  try {
+    return new URL(url).hostname.replace("www.", "");
+  } catch {
+    return "";
+  }
+}
 
 export default function TrackerPage() {
   const navigate = useNavigate();
@@ -95,6 +101,7 @@ export default function TrackerPage() {
       mounted = false;
     };
   }, []);
+
 
   // Map price history by product id for quick lookup
   const historyByProduct = useMemo(() => {
@@ -265,16 +272,17 @@ export default function TrackerPage() {
                 <article key={p.id} className="bg-white rounded-lg shadow-sm overflow-hidden">
                   <div className="bg-slate-50 p-6 flex items-center justify-center relative">
                     <img
-                      src={p.image_url || PLACEHOLDER_IMAGE}
+                      src={p.image_url || undefined}
                       alt={p.title}
-                      className="h-40 w-40 object-cover rounded-md"
+                      className="h-40 w-40 object-cover rounded-md bg-gray-100"
+                      onError={(e) => (e.currentTarget.style.display = "none")}
                     />
                     <span className="absolute top-4 right-4 inline-flex items-center px-2 py-1 bg-emerald-50 text-emerald-700 text-xs font-medium rounded">Active</span>
                   </div>
 
                   <div className="p-4">
                     <h3 className="text-lg font-semibold text-gray-900 mb-1">{p.title}</h3>
-                    <div className="text-sm text-gray-500 mb-4">{p.store_name || new URL(p.url || "https://example.com").hostname.replace("www.", "")}</div>
+                    <div className="text-sm text-gray-500 mb-4">{p.store_name || safeHost(p.url).hostname.replace("www.", "")}</div>
 
                     <div className="flex items-center justify-between">
                       <div>
