@@ -282,7 +282,7 @@ export default function TrackerPage() {
 
                   <div className="p-4">
                     <h3 className="text-lg font-semibold text-gray-900 mb-1">{p.title}</h3>
-                    <div className="text-sm text-gray-500 mb-4">{p.store_name || safeHost(p.url).hostname.replace("www.", "")}</div>
+                    <div className="text-sm text-gray-500 mb-4">{p.store_name || safeHost(p.url)}</div>
 
                     <div className="flex items-center justify-between">
                       <div>
