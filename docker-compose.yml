@@ -100,7 +100,7 @@ services:
   # FastAPI Backend (Optional)
   # -----------------------------------------
   fastapi:
-    build: ./backend_python
+    build: ./backend/python
     container_name: fastapi_app
     ports:
       - "8000:8000"
@@ -109,7 +109,8 @@ services:
       - rabbitmq
       - elasticsearch
     environment:
-      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=postgresql://postgres.sfdzwhjgegdtlndsepxs:MarketHubPS853@aws-1-ap-northeast-1.pooler.supabase.com:6543/postgres?sslmode=require
+
       - RABBIT_URL=amqp://admin:admin@rabbitmq:5672//
       - ELASTIC_URL=http://elasticsearch:9200
     restart: always
@@ -118,7 +119,7 @@ services:
   # Node.js Backend (Optional)
   # -----------------------------------------
   node_api:
-    build: ./backend_node
+    build: ./backend/node
     container_name: node_app
     ports:
       - "5000:5000"
@@ -126,6 +127,8 @@ services:
       - redis
       - elasticsearch
     environment:
+      - DATABASE_URL=postgresql://postgres.sfdzwhjgegdtlndsepxs:MarketHubPS853@aws-1-ap-northeast-1.pooler.supabase.com:6543/postgres?sslmode=require
+
       - REDIS_URL=redis://redis:6379
       - ELASTIC_URL=http://elasticsearch:9200
     restart: always

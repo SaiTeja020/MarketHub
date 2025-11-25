@@ -11,3 +11,4 @@ beautifulsoup4
 scrapy
 elasticsearch
 python-dotenv
+psycopg2-binary
