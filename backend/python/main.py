@@ -1,30 +1,367 @@
-from fastapi import FastAPI
-import os
+from fastapi import FastAPI, HTTPException
 import psycopg2
-from psycopg2.extras import RealDictCursor
+import psycopg2.extras
+import redis
 
-app = FastAPI()
+import os, time, json, traceback
+from typing import Optional
 
-# --- Database Connection ---
-DATABASE_URL = os.getenv("DATABASE_URL")
+# Try to import celery task interface if present. If not, the code will still work
+# and fall back to enqueuing via celery.send_task when available.
 
-def get_db_connection():
-    conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
-    return conn
+try:
+    from celery_app import celery as celery_app #celery_app.celery
+    CELERY_AVAILABLE = True
+except Exception:
+    celery_app = None
+    CELERY_AVAILABLE = False
+# ----------------------------------------
+# 1. Config
+# ----------------------------------------
 
-@app.get("/db-test/{product_id}")
-def db_test(product_id: str):
+DATABASE_URL = os.getenv("DATABASE_URL")        # use pooler string with sslmode=require
+REDIS_HOST = os.getenv("REDIS_HOST", "redis")
+REDIS_PORT = int(od.getenv("REDIS_PORT", 6379))
+RABBIT_URL = os.getenv("RABBIT_URL", "amqp://admin:admin@rabbitmq:5672//")
+
+# Age thresholds (seconds)
+FRESH_SECONDS = 60 * 60         # 1 hour
+STALE_SECONDS = 6 * 60 * 60     # 6 hours
+
+# Lock TTL for scraping (seconds)
+SCRAPE_LOCK_TTL = 60 * 5  # 5 minutes
+
+# How long to cache items in Redis (safety TTL)
+CACHE_TTL_SECONDS = 24 * 3600  # 24 hours
+
+# -----------------------------
+# DB Connection (sync)
+# -----------------------------
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL environment variable is required")
+
+# Connect with SSL (required by Supabase)
+
+conn = psycopg2.connect(DATABASE_URL, sslmode="require")
+
+
+# ----------------------------------------
+# 2. Redis Connection
+# ----------------------------------------
+redis_client = redis.Redis(host="REDIS_HOST",port="REDIS_POST",decode_responses=True)  # returns strings, not bytes
+
+
+# ----------------------------------------
+# 3. Create FastAPI App
+# ----------------------------------------
+
+app = FastAPI(title="MarketHub Backend")
+
+# -----------------------------
+# Helpers
+# -----------------------------
+
+def now_ts():
+    return int(time.time())
+
+def meta_key(product_id: str) -> str:
+    return f"product_meta:{product_id}"
+
+def product_key(product_id: str) -> str:
+    return f"product:{product_id}"
+
+def history_key(product_id: str) -> str:
+    return f"price_history:{product_id}"
+
+def retailers_key(product_id: str) -> str:
+    return f"retailers:{product_id}"
+
+def lock_key(product_id: str) -> str:
+    return f"scrape_lock:{product_id}"
+
+def get_meta(product_id: str) -> str:
+    raw = redis_client.get(meta_key(product_key))
+    if not raw:
+        return None
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT id, title, current_price FROM products WHERE id=%s", (product_id,))
+        return json.loads(raw)
+    except Exception:
+        return None
+    
+def set_meta(product_id: str, meta: dict):
+    redis_client.set(meta_key(product_id), json.dumps(meta), ex=CACHE_TTL_SECONDS)
+
+def acquire_lock(product_id: str, ttl: int = SCRAPE_LOCK_TTL) -> bool:
+    k = lock_key(product_id)
+    # set nx ensures atomic acquire
+    return redis_client.set(k, "1", nx = True, ex =ttl) is True
+
+def release_lock(product_id: str):
+    redis_client.delete(lock_key(product_id))
+
+# -----------------------------
+# DB read helpers
+# -----------------------------
+
+def db_get_product(product_id: str) -> Optional[dict]:
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("""
+        SELECT id, title, url, image_url, current_price,
+               lowest_price, highest_price, created_at
+        FROM products
+        WHERE id = %s
+    """, (product_id,))
+    row = cur.fetchone()
+    cur.close()
+    return dict(row) if row else None
+
+def db_get_price_history(product_id: str):
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("""
+        SELECT id, price, tracked_at
+        FROM price_history
+        WHERE product_id = %s
+        ORDER BY tracked_at ASC
+    """, (product_id,))
+    rows = cur.fetchall()
+    cur.close()
+    return [dict(r) for r in rows]
+
+def db_get_retailers(product_id: str):
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("""
+        SELECT retailer_name, price, recorded_at
+        FROM retailer_prices
+        WHERE product_id = %s
+        ORDER BY recorded_at DESC
+    """, (product_id,))
+    rows = cur.fetchall()
+    cur.close()
+    return [dict(r) for r in rows]
+
+# -----------------------------
+# DB write helpers (used by scraper)
+# Implement these to match your schema and constraints.
+# -----------------------------
+
+def db_upsert_products(product_obj: dict):
+    """
+    Upsert minimal fields into products table (example).
+    product_obj must contain id and the fields to update like current_price, lowest_price, etc.
+    """
+
+    cur = conn.cursor()
+    # example: update current_price and maybe lowest/highest
+    cur.execute("""
+        UPDATE products
+        SET current_price = %s, lowest_price = %s, highest_price = %s
+        WHERE id = %s
+    """, (
+        product_obj.get("current_price"),
+        product_obj.get("lowest_price"),
+        product_obj.get("highest_price"),
+        product_obj.get("id"),
+    ))
+    conn.commit()
+    cur.close()
+
+def db_insert_price_history(product_id: str, price:float, tracked_at_ts: int):
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO price_history (product_id, price, tracked_at)
+        VALUES (%s, %s, to_timestamp(%s))
+    """, (product_id, price, tracked_at_ts))
+    conn.commit()
+    cur.close()
+
+# -----------------------------
+# Scraper integration (placeholder)
+# Replace fetch_from_scraper() with your real scraper.
+# Should return dict with product fields, list of price history points, retailers list.
+# -----------------------------
+
+def fetch_from_scraper(product_id: str) ->dict:
+    """
+    Placeholder scraping function.
+    Replace the content with your real scraping logic (requests/bs4/playwright etc.)
+    Must return:
+    {
+      "product": { id, title, url, image_url, current_price, lowest_price, highest_price, created_at? },
+      "price_history": [ { "price": 1999, "tracked_at": 1700000000 }, ... ],
+      "retailers": [ { "retailer_name": "Amazon", "price": 1999, "recorded_at": 1700000000 }, ... ]
+    }
+    """
+    # ---- MOCK / STUB ----
+    ts = now_ts()
+    mock_product = {
+        "id": product_id,
+        "title": f"Mock product {product_id}",
+        "url": f"https://example.com/p/{product_id}",
+        "image_url": None,
+        "current_price": 999,
+        "lowest_price": 899,
+        "highest_price": 1299,
+        "created_at": ts
+    }
+    mock_history = [
+        {"price": 1299, "tracked_at": ts - 86400*2},
+        {"price": 1099, "tracked_at": ts - 86400},
+        {"price": 999, "tracked_at": ts},
+    ]
+    mock_retailers = [
+        {"retailer_name": "RetailerA", "price": 999, "recorded_at": ts},
+        {"retailer_name": "RetailerB", "price": 1049, "recorded_at": ts}
+    ]
+    return {"product": mock_product, "price_history": mock_history, "retailers": mock_retailers}
+
+# -----------------------------
+# Scrape & update routine (atomic-ish)
+# This function is used by both Celery worker (background) and immediate sync scrape.
+# -----------------------------
+
+def perform_scrape_and_update(product_id: str, triggered_by: str = "sync") -> dict:
+    """
+    Perform scraping, update DB, update Redis caches and meta.
+    Returns the fresh product object.
+    """
+    # Acquire a lock to avoid concurrent scrapes
+    got_lock = acquire_lock(product_id)
+    if not got_lock:
+        # Another worker is scraping; return current cached data (if any)
+        existing = redis_client.get(product_key[product_id])
+        if existing:
+            return json.loads(existing)
+        # else fallback to DB
+    try:
+        # Fetch data from scraper (replace with actual scraper)
+        scraped = fetch_from_scraper(product_id)
+        product_obj = scraped.get("product")
+        history = scraped.get("price_history", []);
+        retailers = scraped.get("retailers", [])
+         # 1) Update DB (persist authoritative data)
+        try:
+            if product_obj:
+                db_upsert_product(product_id)
+            # Save price history rows
+            for ph in history:
+                # insert into price_history; ensure tracked_at provided
+                tracked_at_ts = ph.get("tracked_at", now_ts())
+                db_insert_price_history(product_id, ph.get("price"), tracked_at_ts)
+        except Exception:
+            # DB update failure is bad but we should continue to update cache
+            print("Warning: DB update failed:", traceback.format_exc())
+        # 2) Update Redis caches (overwrite AFTER success)
+        if product_obj:
+            redis_client.set(product_key(product_id), json.dumps(product_obj), ex=CACHE_TTL_SECONDS)
+        if history:
+            redis_client.set(history_key(product_id), json.dumps(history), ex=CACHE_TTL_SECONDS)
+        if retailers:
+            redis_client.set(retailers_key(product_id), json.dumps(retailers), ex=CACHE_TTL_SECONDS)
+        # 3) Update metadata
+        meta = {"scraped_at": now_ts(), "triggered_by": triggered_by}
+        set_meta(product_id, meta)
+
+        return product_obj or {}
+    finally:
+        # always release lock if we acquired it
+        try:
+            release_lock(product_id)
+        except Exception:
+            pass
+# ----------------------------------------
+# 4. Health check
+# ----------------------------------------
+
+@app.get("/health")
+def health():
+    return { "status": "ok"}
+
+# ----------------------------------------
+# 5. Get a single product by ID
+# ----------------------------------------
+
+@app.get("/products/{product_id}")
+def get_product(product_id: str):
+    try:
+        cached = redis.get(f"product: {product_id}")
+        if cached:
+            return json.loads(cached)
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute('''
+                        SELECT id, title, url, image_url, current_price, lowest_price, highest_price, created_at
+                        from products
+                        where id = %s
+                    
+                    ''', (product_id,))
         row = cur.fetchone()
         cur.close()
-        conn.close()
 
         if not row:
-            return {"status": "not_found"}
-        return {"status": "ok", "product": row}
+            raise HTTPException(404, "Product Not Found")
+        return row
+    
+    except Exception as e:
+        raise HTTPException(500, f"Database error: {e}")
+    
+
+# ----------------------------------------
+# 6. Get price history for a product
+# ----------------------------------------
+
+@app.get("/price_history/{product_id}")
+def price_history(product_id : str):
+    try:
+        cached = redis.get(f"product:{product_id}")
+        if cached:
+            return json.loads(cached)
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute('''
+                        SELECT id, price, tracked_at
+                        FROM price_history
+                        WHERE product_id = %s
+                        ORDER BY tracked_at ASC 
+                    ''', (product_id,))
+        rows = cur.fetchall()
+        cur.close()
+
+        return rows
+    
+    except Exception as e:
+        raise HTTPException(500, f"Database Error: {e}")
+    
+# ----------------------------------------
+# 7. Get retailer prices for a product
+# ----------------------------------------
+@app.get("/retailers/{product_id}")
+def retailer_prices(product_id: str):
+    try:
+        cached = redis.get(f"product:{product_id}")
+        if cached:
+            return json.loads(cached)
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("""
+            SELECT retailer_name, price, recorded_at
+            FROM retailer_prices
+            WHERE product_id = %s
+            ORDER BY recorded_at DESC
+        """, (product_id,))
+        rows = cur.fetchall()
+        cur.close()
+
+        return rows
 
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        raise HTTPException(500, f"Database error: {e}")
+
+
+# ----------------------------------------
+# 8. Placeholder for analysis endpoint (Celery Later)
+# ----------------------------------------
+
+@app.post("/analyze/{product_id}")
+def analyze_product(product_id: str):
+    return{
+        "status": "queued",
+        "message": "LLM Scoring not connected yet. Celery will be added next."
+    }
+
