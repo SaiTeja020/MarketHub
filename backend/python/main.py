@@ -511,4 +511,3 @@ def analyze_product_route(product_id: str):
     except Exception as e:
         print("Error in /analyze:", traceback.format_exc())
         raise HTTPException(500, f"Internal error: {e}")
-Quick notes and things to customize
