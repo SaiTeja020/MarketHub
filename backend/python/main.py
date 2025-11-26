@@ -268,6 +268,53 @@ def perform_scrape_and_update(product_id: str, triggered_by: str = "sync") -> di
             release_lock(product_id)
         except Exception:
             pass
+
+# -----------------------------
+# Enqueue background scrape via Celery/RabbitMQ (if available)
+# -----------------------------
+def enqueue_background_scrape(product_id: str):
+    """
+    Enqueue a background scrape. If Celery is available, use send_task to avoid importing tasks module.
+    If not available, do nothing (or you can fallback to synchronous scrape).
+    """
+    if not CELERY_AVAILABLE or celery_app is None:
+        # fallback: flame out gracefully (we could spawn a thread, but keep behaviour predictable)
+        print("Celery not available; cannot enqueue background scrape for", product_id)
+        return False
+    try:
+        # Use send_task so worker name is decoupled (worker should have a task registered like "tasks.scrape_product")
+        # Replace 'tasks.scrape_product' with your actual task name in the worker.
+        celery_app.send_task("tasks.scrape_product", args=[product_id], queue="default")
+        return True
+    except Exception:
+        print("Failed to enqueue Celery task:", traceback.format_exc())
+        return False
+    
+# -----------------------------
+# Decision helper based on metadata age
+# -----------------------------
+
+def decide_action(product_id: str) -> str:
+    """
+    Returns:
+      - "return_cached"  (age < 1h)
+      - "return_and_enqueue" (1-6h)
+      - "immediate_scrape" (>=6h or no meta)
+    """
+    meta = get_meta(product_id)
+    if not meta or "scraped_at" not in meta:
+        # No metadata: treat as immediate scrape (we want fresh data on first access)
+        return "immediate_scrape"
+    try:
+        scraped_at = int(meta.get("scraped_at", 0))
+    except Exception:
+        scraped_at = 0
+    age = now_ts() - scraped_at
+    if age < FRESH_SECONDS:
+        return "return_cached"
+    if age < STALE_SECONDS:
+        return "return_and_enqueue"
+    return "immediate_scrape"
 # ----------------------------------------
 # 4. Health check
 # ----------------------------------------
@@ -277,91 +324,191 @@ def health():
     return { "status": "ok"}
 
 # ----------------------------------------
-# 5. Get a single product by ID
+# Routes
 # ----------------------------------------
 
+# PRODUCT route with caching/scrape logic
 @app.get("/products/{product_id}")
-def get_product(product_id: str):
+def get_product_route(product_id: str):
     try:
-        cached = redis.get(f"product: {product_id}")
+        action = decide_action(product_id)
+
+        # If cached data present, return it (fast path)
+        cached = redis_client.get(product_key(product_id))
         if cached:
-            return json.loads(cached)
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute('''
-                        SELECT id, title, url, image_url, current_price, lowest_price, highest_price, created_at
-                        from products
-                        where id = %s
-                    
-                    ''', (product_id,))
-        row = cur.fetchone()
-        cur.close()
+            cached_obj = json.loads(cached)
+        else:
+            cached_obj = None
 
-        if not row:
-            raise HTTPException(404, "Product Not Found")
-        return row
-    
+        if action == "return_cached":
+            if cached_obj:
+                return {"source": "cache", "product": cached_obj}
+            # no cache despite "fresh" meta → fallback to DB fetch and update meta
+            db_obj = db_get_product(product_id)
+            if db_obj:
+                # update Redis meta and cache
+                redis_client.set(product_key(product_id), json.dumps(db_obj), ex=CACHE_TTL_SECONDS)
+                set_meta(product_id, {"scraped_at": now_ts(), "triggered_by": "db-fallback"})
+                return {"source": "db", "product": db_obj}
+            raise HTTPException(404, "Product not found")
+
+        elif action == "return_and_enqueue":
+            # return cached if available, and enqueue background scrape
+            if cached_obj:
+                # attempt to enqueue (best-effort)
+                enqueued = enqueue_background_scrape(product_id)
+                return {"source": "cache", "enqueued": enqueued, "product": cached_obj}
+            else:
+                # if no cached data, fallback to immediate scrape (synchronous)
+                fresh = perform_scrape_and_update(product_id, triggered_by="sync-fallback")
+                if not fresh:
+                    raise HTTPException(404, "Product not found after scraping")
+                return {"source": "scrape", "product": fresh}
+
+        else:  # immediate_scrape
+            # If cache exists but old, we still return cached immediately and then decide:
+            # Per your requirement: for >6h we should IMMEDIATELY scrape and return fresh result.
+            # We'll attempt to run the scrape synchronously (with lock) and return fresh data.
+            # Acquire lock to avoid multiple concurrent immediate scrapes.
+            if acquire_lock(product_id):
+                try:
+                    fresh = perform_scrape_and_update(product_id, triggered_by="immediate")
+                    if fresh:
+                        return {"source": "scrape", "product": fresh}
+                    # If scrape returned empty, fallback to cache or DB
+                    if cached_obj:
+                        return {"source": "cache-stale", "product": cached_obj}
+                    db_obj = db_get_product(product_id)
+                    if db_obj:
+                        redis_client.set(product_key(product_id), json.dumps(db_obj), ex=CACHE_TTL_SECONDS)
+                        return {"source": "db", "product": db_obj}
+                    raise HTTPException(404, "Product not found after scraping")
+                finally:
+                    release_lock(product_id)
+            else:
+                # Another process is scraping. Return cached (if any) or DB fallback.
+                if cached_obj:
+                    return {"source": "cache-waiting", "product": cached_obj}
+                db_obj = db_get_product(product_id)
+                if db_obj:
+                    redis_client.set(product_key(product_id), json.dumps(db_obj), ex=CACHE_TTL_SECONDS)
+                    return {"source": "db", "product": db_obj}
+                raise HTTPException(503, "Another process is scraping; try again shortly")
+
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(500, f"Database error: {e}")
-    
+        print("Error in /products:", traceback.format_exc())
+        raise HTTPException(500, f"Internal error: {e}")
 
-# ----------------------------------------
-# 6. Get price history for a product
-# ----------------------------------------
 
-@app.get("/price_history/{product_id}")
-def price_history(product_id : str):
+# PRICE HISTORY route same pattern
+@app.get("/price-history/{product_id}")
+def price_history_route(product_id: str):
     try:
-        cached = redis.get(f"product:{product_id}")
-        if cached:
-            return json.loads(cached)
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute('''
-                        SELECT id, price, tracked_at
-                        FROM price_history
-                        WHERE product_id = %s
-                        ORDER BY tracked_at ASC 
-                    ''', (product_id,))
-        rows = cur.fetchall()
-        cur.close()
+        action = decide_action(product_id)
+        cached = redis_client.get(history_key(product_id))
+        cached_rows = json.loads(cached) if cached else None
 
-        return rows
-    
+        if action == "return_cached":
+            if cached_rows:
+                return {"source": "cache", "price_history": cached_rows}
+            rows = db_get_price_history(product_id)
+            redis_client.set(history_key(product_id), json.dumps(rows), ex=CACHE_TTL_SECONDS)
+            return {"source": "db", "price_history": rows}
+
+        elif action == "return_and_enqueue":
+            if cached_rows:
+                enqueue_background_scrape(product_id)
+                return {"source": "cache", "enqueued": True, "price_history": cached_rows}
+            else:
+                # no cached, synchronous scrape fallback
+                fresh = perform_scrape_and_update(product_id, triggered_by="sync-fallback")
+                rows = db_get_price_history(product_id)
+                redis_client.set(history_key(product_id), json.dumps(rows), ex=CACHE_TTL_SECONDS)
+                return {"source": "scrape", "price_history": rows}
+
+        else:  # immediate_scrape
+            # immediate scraping for history as well
+            if acquire_lock(product_id):
+                try:
+                    perform_scrape_and_update(product_id, triggered_by="immediate")
+                    rows = db_get_price_history(product_id)
+                    redis_client.set(history_key(product_id), json.dumps(rows), ex=CACHE_TTL_SECONDS)
+                    return {"source": "scrape", "price_history": rows}
+                finally:
+                    release_lock(product_id)
+            else:
+                if cached_rows:
+                    return {"source": "cache-waiting", "price_history": cached_rows}
+                rows = db_get_price_history(product_id)
+                redis_client.set(history_key(product_id), json.dumps(rows), ex=CACHE_TTL_SECONDS)
+                return {"source": "db", "price_history": rows}
+
     except Exception as e:
-        raise HTTPException(500, f"Database Error: {e}")
+        print("Error in /price-history:", traceback.format_exc())
+        raise HTTPException(500, f"Internal error: {e}")
+
     
-# ----------------------------------------
-# 7. Get retailer prices for a product
-# ----------------------------------------
+# RETAILERS route same pattern
 @app.get("/retailers/{product_id}")
-def retailer_prices(product_id: str):
+def retailers_route(product_id: str):
     try:
-        cached = redis.get(f"product:{product_id}")
-        if cached:
-            return json.loads(cached)
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute("""
-            SELECT retailer_name, price, recorded_at
-            FROM retailer_prices
-            WHERE product_id = %s
-            ORDER BY recorded_at DESC
-        """, (product_id,))
-        rows = cur.fetchall()
-        cur.close()
+        action = decide_action(product_id)
+        cached = redis_client.get(retailers_key(product_id))
+        cached_rows = json.loads(cached) if cached else None
 
-        return rows
+        if action == "return_cached":
+            if cached_rows:
+                return {"source": "cache", "retailers": cached_rows}
+            rows = db_get_retailers(product_id)
+            redis_client.set(retailers_key(product_id), json.dumps(rows), ex=CACHE_TTL_SECONDS)
+            return {"source": "db", "retailers": rows}
+
+        elif action == "return_and_enqueue":
+            if cached_rows:
+                enqueue_background_scrape(product_id)
+                return {"source": "cache", "enqueued": True, "retailers": cached_rows}
+            else:
+                fresh = perform_scrape_and_update(product_id, triggered_by="sync-fallback")
+                rows = db_get_retailers(product_id)
+                redis_client.set(retailers_key(product_id), json.dumps(rows), ex=CACHE_TTL_SECONDS)
+                return {"source": "scrape", "retailers": rows}
+
+        else:  # immediate_scrape
+            if acquire_lock(product_id):
+                try:
+                    perform_scrape_and_update(product_id, triggered_by="immediate")
+                    rows = db_get_retailers(product_id)
+                    redis_client.set(retailers_key(product_id), json.dumps(rows), ex=CACHE_TTL_SECONDS)
+                    return {"source": "scrape", "retailers": rows}
+                finally:
+                    release_lock(product_id)
+            else:
+                if cached_rows:
+                    return {"source": "cache-waiting", "retailers": cached_rows}
+                rows = db_get_retailers(product_id)
+                redis_client.set(retailers_key(product_id), json.dumps(rows), ex=CACHE_TTL_SECONDS)
+                return {"source": "db", "retailers": rows}
 
     except Exception as e:
-        raise HTTPException(500, f"Database error: {e}")
+        print("Error in /retailers:", traceback.format_exc())
+        raise HTTPException(500, f"Internal error: {e}")
 
-
-# ----------------------------------------
-# 8. Placeholder for analysis endpoint (Celery Later)
-# ----------------------------------------
-
+# ANALYZE placeholder: enqueues a scoring job (background)
 @app.post("/analyze/{product_id}")
-def analyze_product(product_id: str):
-    return{
-        "status": "queued",
-        "message": "LLM Scoring not connected yet. Celery will be added next."
-    }
-
+def analyze_product_route(product_id: str):
+    try:
+        # Prefer enqueuing a Celery LLM scoring task
+        ok = enqueue_background_scrape(product_id)  # reuse enqueue for scraping/analysis
+        if ok:
+            return {"status": "queued", "message": "Background job enqueued"}
+        # fallback: trigger synchronous scrape (less ideal)
+        fresh = perform_scrape_and_update(product_id, triggered_by="analyze-sync")
+        if fresh:
+            return {"status": "done", "product": fresh}
+        raise HTTPException(500, "Failed to analyze product")
+    except Exception as e:
+        print("Error in /analyze:", traceback.format_exc())
+        raise HTTPException(500, f"Internal error: {e}")
+Quick notes and things to customize
