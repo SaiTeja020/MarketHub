@@ -1,13 +1,18 @@
+// utils/rabbitmq.ts
+
 import amqp from "amqplib";
 
-let channel: any ;
+let mqChannel: amqp.Channel | null = null;
 
 export const connectQueue = async () => {
+  if (mqChannel) return mqChannel; // already connected
+
   const conn = await amqp.connect(process.env.RABBIT_URL!);
-  channel = await conn.createChannel();
-  await channel.assertQueue("scrape_queue");
+  mqChannel = await conn.createChannel();
+
+  console.log("✔ RabbitMQ connected");
+
+  return mqChannel;
 };
 
-export const pushScrapeTask = async (productId: string) => {
-  channel.sendToQueue("scrape_queue", Buffer.from(JSON.stringify({ productId })));
-};
+export { mqChannel as channel }; // <-- export the variable!
