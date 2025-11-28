@@ -59,7 +59,7 @@ services:
     restart: always
 
   # -----------------------------------------
-  # Logstash (Ingest pipeline)
+  # Logstash (Ingest Pipeline)
   # -----------------------------------------
   logstash:
     image: docker.elastic.co/logstash/logstash:8.14.0
@@ -97,10 +97,12 @@ services:
     restart: always
 
   # -----------------------------------------
-  # FastAPI Backend (Optional)
+  # FastAPI Backend
   # -----------------------------------------
   fastapi:
-    build: ./backend/python
+    build:
+      context: ./backend/python
+      dockerfile: Dockerfile
     container_name: fastapi_app
     ports:
       - "8000:8000"
@@ -109,14 +111,35 @@ services:
       - rabbitmq
       - elasticsearch
     environment:
+      # Supabase DB
       - DATABASE_URL=postgresql://postgres.sfdzwhjgegdtlndsepxs:MarketHubPS853@aws-1-ap-northeast-1.pooler.supabase.com:6543/postgres?sslmode=require
 
+      # RabbitMQ / Redis
       - RABBIT_URL=amqp://admin:admin@rabbitmq:5672//
+      - REDIS_URL=redis://redis:6379/0
+
+      # Elasticsearch
       - ELASTIC_URL=http://elasticsearch:9200
     restart: always
 
   # -----------------------------------------
-  # Node.js Backend (Optional)
+  # Celery Worker (NEW)
+  # -----------------------------------------
+  celery_worker:
+    build:
+      context: ./backend/python
+      dockerfile: Dockerfile.worker
+    container_name: celery_worker
+    depends_on:
+      - redis
+      - rabbitmq
+    environment:
+      - RABBIT_URL=amqp://admin:admin@rabbitmq:5672//
+      - REDIS_URL=redis://redis:6379/0
+    restart: always
+
+  # -----------------------------------------
+  # Node.js Backend (Your second backend)
   # -----------------------------------------
   node_api:
     build: ./backend/node
@@ -128,7 +151,6 @@ services:
       - elasticsearch
     environment:
       - DATABASE_URL=postgresql://postgres.sfdzwhjgegdtlndsepxs:MarketHubPS853@aws-1-ap-northeast-1.pooler.supabase.com:6543/postgres?sslmode=require
-
       - REDIS_URL=redis://redis:6379
       - ELASTIC_URL=http://elasticsearch:9200
     restart: always
@@ -141,3 +163,4 @@ volumes:
   rabbitmq_data:
   es_data:
   grafana_data:
+`
