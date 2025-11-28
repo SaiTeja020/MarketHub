@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from "react";
-import { supabase } from "../lib/supabase.js";
 import { useParams } from "react-router-dom";
+
 import {
   ResponsiveContainer,
   AreaChart,
@@ -10,6 +10,8 @@ import {
   YAxis,
   CartesianGrid,
 } from "recharts";
+
+import api from "../lib/api.js"; // axios instance
 
 export default function AnalyticsPage() {
   const { id } = useParams(); // product id from route
@@ -34,45 +36,29 @@ export default function AnalyticsPage() {
         setLoading(true);
         setError("");
 
-        /** 1) Fetch product */
-        const { data: prodData, error: prodErr } = await supabase
-          .from("products")
-          .select(
-            "id, title, url, image_url, current_price, lowest_price, highest_price, created_at"
-          )
-          .eq("id", id)
-          .single();
-
-        if (prodErr && prodErr.code !== "PGRST116") throw prodErr;
+        /** 
+         * Only ONE call to the backend
+         * GET /api/analytics/:id
+         * 
+         * Backend returns:
+         * {
+         *   product: {...},
+         *   price_history: [...],
+         *   retailer_prices: [...]
+         * }
+         */
+        const res = await api.get(`/analytics/${id}`);
 
         if (!mounted) return;
-        setProduct(prodData || null);
 
-        /** 2) Fetch price history */
-        const { data: phData, error: phErr } = await supabase
-          .from("price_history")
-          .select("id, product_id, price, tracked_at")
-          .eq("product_id", id)
-          .order("tracked_at", { ascending: true });
+        setProduct(res.data.product || null);
+        setPriceHistory(res.data.price_history || []);
+        setRetailerPrices(res.data.retailer_prices || []);
 
-        if (phErr) throw phErr;
-        if (!mounted) return;
-        setPriceHistory(phData ?? []);
-
-        /** 3) Fetch retailer comparison */
-        const { data: rpData, error: rpErr } = await supabase
-          .from("retailer_prices")
-          .select("id, product_id, retailer_name, price, recorded_at")
-          .eq("product_id", id)
-          .order("recorded_at", { ascending: false });
-
-        if (rpErr) throw rpErr;
-        if (!mounted) return;
-        setRetailerPrices(rpData ?? []);
       } catch (err) {
         console.error(err);
         if (mounted) {
-          setError(err.message || "Failed to load analytics data");
+          setError(err?.response?.data?.error || err.message || "Failed to load data");
         }
       } finally {
         if (mounted) setLoading(false);

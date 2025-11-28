@@ -12,6 +12,7 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.84.0",
     "amqplib": "^0.10.9",
+    "axios": "^1.13.2",
     "ioredis": "^5.8.2",
     "playwright": "^1.57.0",
     "react": "^19.2.0",

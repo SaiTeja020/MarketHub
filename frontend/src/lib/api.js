@@ -1,4 +1,19 @@
 // src/lib/api.js
+import axios from "axios";
+
+const api = axios.create({
+  baseURL: "/api",  // works on Vite + backend proxy
+  timeout: 10000,
+});
+
+// Optional: attach token if using Supabase auth
+api.interceptors.request.use(async (config) => {
+  const token = localStorage.getItem("access_token");
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  return config;
+});
+
+export default api;
 
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
