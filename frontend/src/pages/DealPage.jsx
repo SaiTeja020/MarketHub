@@ -130,6 +130,10 @@ export default function DealPage() {
 
           <DealGauge score={deal.deal_score} />
 
+          <DealSummary lines={deal.summary}/>
+          
+          <PriceHistoryChart data={deal.price_history}/>
+
           <div className="mt-4">
             {deal.summary.map((line, i) => (
               <p key={i} className="text-gray-700">
