@@ -2,14 +2,18 @@
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, HttpUrl
+from utils.redis_client import get_redis
+import httpx
 import uuid
+import os
 
-from services.scrape_service import publish_scrape_job, fetch_result
 from services.analyze_service import request_analysis, get_analysis_result
+
+NODE_SCRAPER_URL = os.getenv("NODE_SCRAPER_URL", "http://node_app:5000")
 
 app = FastAPI(
     title="MarketHub API",
-    description="Microservice architecture with RabbitMQ, Redis, and Celery",
+    description="Coordinator API for scraping, analysis, and indexing",
     version="1.0.0"
 )
 
@@ -30,56 +34,66 @@ class AnalyzeRequest(BaseModel):
 
 
 # -------------------------------
-# Scraping Endpoints
+# Scraping Endpoints (Handled by Node)
 # -------------------------------
 
 @app.post("/scrape", status_code=202)
 async def enqueue_scrape_job(req: ScrapeRequest):
     """
-    Publishes a scraping job to RabbitMQ.
-    The scraper worker (separate process) will consume, scrape,
-    and then write the result to Redis.
+    FastAPI does NOT scrape.
+    It forwards scrape requests to the Node backend.
     """
     task_id = str(uuid.uuid4())
 
     payload = {
         "task_id": task_id,
         "url": str(req.url),
-        "source": req.source.lower()
+        "source": req.source.lower(),
     }
 
-    try:
-        await publish_scrape_job(req.source, payload)
-    except Exception as e:
+    # Call Node scraper over HTTP
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(
+                f"{NODE_SCRAPER_URL}/scrape",
+                json=payload,
+                timeout=30
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Node scraper error: {e}")
+
+    if response.status_code != 202:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to publish scrape job: {e}"
+            detail=f"Node scraper failed: {response.text}"
         )
 
     return {
         "task_id": task_id,
         "status": "queued",
-        "message": f"Scrape job for {req.source} published successfully"
+        "message": "Scrape job forwarded to Node scraper"
     }
 
 
 @app.get("/scrape/result/{task_id}")
 async def get_scrape_result(task_id: str):
     """
-    Fetches the scraping result from Redis.
-    Returns 404 if the result hasn't been written yet.
+    Fetch the scraping result from Redis.
+    Node worker writes into: scrape:result:{task_id}
     """
-    result = await fetch_result(task_id)
+    redis = await get_redis()
+    data = await redis.get(f"scrape:result:{task_id}")
 
-    if result is None:
+    if not data:
         raise HTTPException(
             status_code=404,
             detail="Scraping result not ready"
         )
 
+    import json
     return {
         "task_id": task_id,
-        "result": result
+        "result": json.loads(data)
     }
 
 
@@ -90,7 +104,7 @@ async def get_scrape_result(task_id: str):
 @app.post("/analyze", status_code=202)
 async def enqueue_analysis(req: AnalyzeRequest):
     """
-    Creates a Celery task that performs Gemini analysis.
+    Sends scraping result to Celery for Gemini analysis.
     """
     task_id = str(uuid.uuid4())
 
@@ -103,7 +117,7 @@ async def enqueue_analysis(req: AnalyzeRequest):
     }
 
     try:
-        request_analysis.delay(payload)  # send to Celery
+        request_analysis(payload)
     except Exception as e:
         raise HTTPException(
             status_code=500,

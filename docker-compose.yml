@@ -2,7 +2,7 @@ version: "3.8"
 
 services:
   # -----------------------------------------
-  # Redis (Cache / Queue Backend)
+  # Redis (Cache)
   # -----------------------------------------
   redis:
     image: redis:7-alpine
@@ -14,14 +14,14 @@ services:
     restart: always
 
   # -----------------------------------------
-  # RabbitMQ (Celery Broker)
+  # RabbitMQ (Broker for Node scraper ONLY)
   # -----------------------------------------
   rabbitmq:
     image: rabbitmq:3-management
     container_name: rabbitmq_server
     ports:
-      - "5672:5672"      # Broker
-      - "15672:15672"    # Management UI
+      - "5672:5672"
+      - "15672:15672"
     environment:
       RABBITMQ_DEFAULT_USER: admin
       RABBITMQ_DEFAULT_PASS: admin
@@ -47,7 +47,7 @@ services:
     restart: always
 
   # -----------------------------------------
-  # Kibana (Elasticsearch Dashboard)
+  # Kibana
   # -----------------------------------------
   kibana:
     image: docker.elastic.co/kibana/kibana:8.14.0
@@ -59,7 +59,7 @@ services:
     restart: always
 
   # -----------------------------------------
-  # Logstash (Ingest Pipeline)
+  # Logstash
   # -----------------------------------------
   logstash:
     image: docker.elastic.co/logstash/logstash:8.14.0
@@ -97,7 +97,7 @@ services:
     restart: always
 
   # -----------------------------------------
-  # FastAPI Backend
+  # FastAPI — ONLY router + analysis coordinator
   # -----------------------------------------
   fastapi:
     build:
@@ -110,20 +110,22 @@ services:
       - redis
       - rabbitmq
       - elasticsearch
+      - node_api
     environment:
-      # Supabase DB
+      # Database
       - DATABASE_URL=postgresql://postgres.sfdzwhjgegdtlndsepxs:MarketHubPS853@aws-1-ap-northeast-1.pooler.supabase.com:6543/postgres?sslmode=require
+      
+      # Microservices
+      - NODE_SCRAPER_URL=http://node_api:5000
 
-      # RabbitMQ / Redis
-      - RABBIT_URL=amqp://admin:admin@rabbitmq:5672//
+      # Infrastructure
       - REDIS_URL=redis://redis:6379/0
-
-      # Elasticsearch
+      - RABBIT_URL=amqp://admin:admin@rabbitmq:5672//
       - ELASTIC_URL=http://elasticsearch:9200
     restart: always
 
   # -----------------------------------------
-  # Celery Worker (NEW)
+  # Celery Worker — ONLY analysis (Gemini)
   # -----------------------------------------
   celery_worker:
     build:
@@ -134,12 +136,12 @@ services:
       - redis
       - rabbitmq
     environment:
-      - RABBIT_URL=amqp://admin:admin@rabbitmq:5672//
       - REDIS_URL=redis://redis:6379/0
+      - RABBIT_URL=amqp://admin:admin@rabbitmq:5672//
     restart: always
 
   # -----------------------------------------
-  # Node.js Backend (Your second backend)
+  # Node.js Scraper (Playwright + RabbitMQ + Redis)
   # -----------------------------------------
   node_api:
     build: ./backend/node
@@ -148,19 +150,22 @@ services:
       - "5000:5000"
     depends_on:
       - redis
-      - elasticsearch
+      - rabbitmq
     environment:
+      # Database
       - DATABASE_URL=postgresql://postgres.sfdzwhjgegdtlndsepxs:MarketHubPS853@aws-1-ap-northeast-1.pooler.supabase.com:6543/postgres?sslmode=require
-      - REDIS_URL=redis://redis:6379
+      
+      # Infrastructure
+      - REDIS_URL=redis://redis:6379/0
+      - RABBIT_URL=amqp://admin:admin@rabbitmq:5672//
       - ELASTIC_URL=http://elasticsearch:9200
     restart: always
 
 # -----------------------------------------
-# VOLUMES (Persistence)
+# Persistent Volumes
 # -----------------------------------------
 volumes:
   redis_data:
   rabbitmq_data:
   es_data:
   grafana_data:
-`
