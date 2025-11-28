@@ -17,6 +17,9 @@ from services.elastic_service import (
     search_products
 )
 
+from services.deal_service import compute_deal_score, generate_summary
+from services.elastic_service import PRICE_HISTORY_INDEX, ANALYSIS_INDEX, PRODUCT_INDEX
+
 from services.elastic_service import get_es, PRODUCT_INDEX, ANALYSIS_INDEX
 from elasticsearch import NotFoundError
 
@@ -246,6 +249,82 @@ async def get_product_details(product_id: str):
         "scraped_data": product,
         "analysis": analysis
     }
+
+@app.get("/deal/{product_id}")
+async def deal_summary(product_id: str):
+    es = await get_es()
+
+    # -----------------------------
+    # 1. Fetch product data
+    # -----------------------------
+    try:
+        product_resp = await es.get(index=PRODUCT_INDEX, id=product_id)
+        product = product_resp["_source"]
+    except:
+        raise HTTPException(404, "Product not found")
+
+    # -----------------------------
+    # 2. Fetch price history
+    # -----------------------------
+    hist_query = {
+        "size": 200,
+        "query": {"term": {"product_id": product_id}},
+        "sort": [{"scraped_at": {"order": "asc"}}]
+    }
+
+    hist_resp = await es.search(index=PRICE_HISTORY_INDEX, body=hist_query)
+    history = [h["_source"] for h in hist_resp["hits"]["hits"]]
+
+    prices = [p["price"] for p in history]
+    avg_price = sum(prices) / len(prices) if prices else product["current_price"]
+    min_price = min(prices) if prices else product["current_price"]
+
+    # -----------------------------
+    # 3. Fetch latest analysis
+    # -----------------------------
+    analysis_query = {
+        "size": 1,
+        "query": {"term": {"product_id": product_id}},
+        "sort": [{"completed_at": {"order": "desc"}}]
+    }
+
+    analysis_resp = await es.search(index=ANALYSIS_INDEX, body=analysis_query)
+    analysis_hits = analysis_resp["hits"]["hits"]
+    analysis = analysis_hits[0]["_source"] if analysis_hits else None
+
+    credibility_score = (
+        analysis.get("credibility_score", 0.5)
+        if analysis is not None else 0.5
+    )
+
+    # -----------------------------
+    # 4. Compute final deal score
+    # -----------------------------
+    deal_score = compute_deal_score(
+        price=product["current_price"],
+        historical_prices=prices,
+        credibility_score=credibility_score
+    )
+
+    # -----------------------------
+    # 5. Generate summary
+    # -----------------------------
+    summary_lines = generate_summary(
+        price=product["current_price"],
+        avg_price=avg_price,
+        min_price=min_price,
+        credibility_score=credibility_score
+    )
+
+    return {
+        "product_id": product_id,
+        "deal_score": deal_score,
+        "summary": summary_lines,
+        "scraped_data": product,
+        "analysis_data": analysis,
+        "price_history": history
+    }
+
 
 @app.get("/products")
 async def list_products(
