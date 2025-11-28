@@ -12,3 +12,4 @@ scrapy
 elasticsearch
 python-dotenv
 psycopg2-binary
+elasticsearch>=8.6.0
