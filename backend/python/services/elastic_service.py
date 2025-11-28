@@ -25,6 +25,7 @@ from elasticsearch import AsyncElasticsearch, ElasticsearchException, NotFoundEr
 ELASTIC_URL = os.getenv("ELASTIC_URL", "http://elasticsearch:9200")
 PRODUCT_INDEX = os.getenv("PRODUCT_INDEX", "products")
 ANALYSIS_INDEX = os.getenv("ANALYSIS_INDEX", "deal_analysis")
+PRICE_HISTORY_INDEX = os.getenv("PRICE_HISTORY_INDEX", "price_history")
 
 _es_client: Optional[AsyncElasticsearch] = None
 _es_lock = asyncio.Lock()
@@ -76,6 +77,18 @@ ANALYSIS_MAPPING = {
     }
 }
 
+PRICE_HISTORY_MAPPING = {
+    "mappings": {
+        "properties": {
+            "product_id": {"type": "keyword"},
+            "price": {"type": "double"},
+            "currency": {"type": "keyword"},
+            "scraped_at": {"type": "date"},
+            "source": {"type": "keyword"}
+        }
+    }
+}
+
 
 # ----------------------
 # Ensure indices exist
@@ -101,6 +114,7 @@ async def ensure_indices():
     es = await get_es()
     await ensure_index(es, PRODUCT_INDEX, PRODUCT_MAPPING)
     await ensure_index(es, ANALYSIS_INDEX, ANALYSIS_MAPPING)
+    await ensure_index(es, PRICE_HISTORY_INDEX, PRICE_HISTORY_MAPPING)
 
 
 # ----------------------
@@ -147,6 +161,26 @@ async def index_analysis_result(task_id: str, analysis_doc: Dict[str, Any], doc_
         return resp
     except ElasticsearchException as e:
         raise RuntimeError(f"Failed to index analysis doc: {e}") from e
+    
+async def index_price_history(product_id: str, price: float, currency: str, source: str, scraped_at: str):
+    """
+    Append a new price entry into the price history index.
+    """
+    es = await get_es()
+
+    doc = {
+        "product_id": product_id,
+        "price": price,
+        "currency": currency,
+        "source": source,
+        "scraped_at": scraped_at,
+    }
+
+    try:
+        return await es.index(index=PRICE_HISTORY_INDEX, document=doc)
+    except ElasticsearchException as e:
+        raise RuntimeError(f"Failed to index price history: {e}")
+
 
 
 # ----------------------
@@ -218,3 +252,4 @@ async def close_es():
     if _es_client is not None:
         await _es_client.close()
         _es_client = None
+

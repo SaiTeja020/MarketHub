@@ -13,6 +13,7 @@ from services.elastic_service import (
     close_es,
     index_scraped_product,
     index_analysis_result,
+    index_price_history,
     search_products
 )
 
@@ -102,7 +103,8 @@ async def enqueue_scrape_job(req: ScrapeRequest):
 @app.get("/scrape/result/{task_id}")
 async def get_scrape_result(task_id: str):
     """
-    Fetch scraping result from Redis AND index into Elasticsearch.
+    Fetch scraping result from Redis, index product data,
+    and add price history entry.
     """
     redis = await get_redis()
     raw = await redis.get(f"scrape:result:{task_id}")
@@ -113,11 +115,23 @@ async def get_scrape_result(task_id: str):
     import json
     data = json.loads(raw)
 
-    # Index scraped product into Elasticsearch
+    # 1. Index scraped product
     try:
         await index_scraped_product(data)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to index product: {e}")
+
+    # 2. Index price history event
+    try:
+        await index_price_history(
+            product_id=data.get("product_id"),
+            price=data.get("current_price"),
+            currency=data.get("currency", "INR"),
+            source=data.get("source"),
+            scraped_at=data.get("scraped_at")
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to index price history: {e}")
 
     return {"task_id": task_id, "result": data}
 
