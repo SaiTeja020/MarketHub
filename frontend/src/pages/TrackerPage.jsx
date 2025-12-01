@@ -112,7 +112,7 @@ export default function TrackerPage() {
         user_id: userId,
         product_id: crypto.randomUUID(),
         title: title || "New product",
-        url,
+        url:encodeURI(url),
         image_url: null,
         current_price: null,
         source: safeHost(url),

@@ -2,7 +2,7 @@
 import axios from "axios";
 
 const api = axios.create({
-  baseURL: "/api",  // works on Vite + backend proxy
+  baseURL: "http://localhost:8000",  // works on Vite + backend proxy
   timeout: 10000,
 });
 

@@ -6,6 +6,7 @@ from utils.redis_client import get_redis
 import httpx
 import uuid
 import os
+from urllib.parse import unquote
 
 from services.analyze_service import request_analysis, get_analysis_result
 from services.elastic_service import (
@@ -22,14 +23,29 @@ from services.elastic_service import PRICE_HISTORY_INDEX, ANALYSIS_INDEX, PRODUC
 
 from services.elastic_service import get_es, PRODUCT_INDEX, ANALYSIS_INDEX
 from elasticsearch import NotFoundError
-
-NODE_SCRAPER_URL = os.getenv("NODE_SCRAPER_URL", "http://node_api:5000")
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(
     title="MarketHub API",
     description="Coordinator API for scraping, Gemini analysis, and Elasticsearch indexing",
     version="1.1.0"
 )
+
+# MUST come after app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "*",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+NODE_SCRAPER_URL = os.getenv("NODE_SCRAPER_URL", "http://node_api:5000")
+
 
 # -------------------------------
 # Models
@@ -61,6 +77,7 @@ async def add_user_product(req: TrackProductRequest):
     Adds a user-specific product entry into Elasticsearch.
     (Separate from scraped product data)
     """
+    decoded_url = unquote(req.url)
 
     es = await get_es()
 
@@ -68,7 +85,7 @@ async def add_user_product(req: TrackProductRequest):
         "user_id": req.user_id,
         "product_id": req.product_id,
         "title": req.title,
-        "url": req.url,
+        "url": decoded_url,
         "image_url": req.image_url,
         "source": req.source,
         "current_price": req.current_price,
