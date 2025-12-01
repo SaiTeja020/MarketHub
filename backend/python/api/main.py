@@ -46,6 +46,46 @@ class AnalyzeRequest(BaseModel):
     image_url: HttpUrl | None = None
     current_price: float | None = None
 
+class TrackProductRequest(BaseModel):
+    user_id: str
+    product_id: str
+    title: str | None = None
+    image_url: str | None = None
+    url: str | None = None
+    source: str | None = None
+    current_price: float | None = None
+
+@app.post("/user/add_product")
+async def add_user_product(req: TrackProductRequest):
+    """
+    Adds a user-specific product entry into Elasticsearch.
+    (Separate from scraped product data)
+    """
+
+    es = await get_es()
+
+    doc = {
+        "user_id": req.user_id,
+        "product_id": req.product_id,
+        "title": req.title,
+        "url": req.url,
+        "image_url": req.image_url,
+        "source": req.source,
+        "current_price": req.current_price,
+        "added_at": req.current_price,
+    }
+
+    try:
+        await es.index(
+            index=PRODUCT_INDEX,
+            id=f"{req.user_id}-{req.product_id}",  # avoid clashes
+            document=doc
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Failed to add product: {e}")
+
+    return {"status": "success", "product": doc}
+
 
 # -------------------------------
 # Startup & Shutdown Events
@@ -100,6 +140,50 @@ async def enqueue_scrape_job(req: ScrapeRequest):
         "task_id": task_id,
         "status": "queued",
         "message": "Scrape job forwarded to Node scraper"
+    }
+
+@app.get("/dashboard")
+async def dashboard_api(user_id: str):
+    """
+    Returns:
+    - Products tracked by user_id
+    - Price history for those products
+    """
+
+    es = await get_es()
+
+    # 1) Fetch products filtered by user_id
+    product_query = {
+        "size": 200,
+        "query": {
+            "term": {"user_id": user_id}
+        },
+        "sort": [{"scraped_at": {"order": "desc"}}]
+    }
+
+    prod_resp = await es.search(index=PRODUCT_INDEX, body=product_query)
+    products = [hit["_source"] for hit in prod_resp["hits"]["hits"]]
+
+    # 2) Fetch price history for all these product IDs
+    product_ids = [p["product_id"] for p in products]
+
+    if not product_ids:
+        return {"products": [], "price_history": []}
+
+    hist_query = {
+        "size": 5000,
+        "query": {
+            "terms": {"product_id": product_ids}
+        },
+        "sort": [{"scraped_at": {"order": "asc"}}]
+    }
+
+    hist_resp = await es.search(index=PRICE_HISTORY_INDEX, body=hist_query)
+    price_history = [hit["_source"] for hit in hist_resp["hits"]["hits"]]
+
+    return {
+        "products": products,
+        "price_history": price_history
     }
 
 
@@ -195,6 +279,25 @@ async def get_analysis_result_endpoint(task_id: str):
 # -------------------------------
 # Search Endpoints
 # -------------------------------
+
+@app.delete("/user/remove_product/{user_id}/{product_id}")
+async def remove_user_product(user_id: str, product_id: str):
+    """
+    Removes a tracked product document from ES using composite_id.
+    """
+    es = await get_es()
+
+    doc_id = f"{user_id}-{product_id}"
+
+    try:
+        await es.delete(index=PRODUCT_INDEX, id=doc_id)
+    except NotFoundError:
+        raise HTTPException(404, "Product not found in user list")
+    except Exception as e:
+        raise HTTPException(500, f"Failed to remove product: {e}")
+
+    return {"status": "removed", "product_id": product_id}
+
 
 @app.get("/search")
 async def search_products_api(q: str, size: int = 10, source: str | None = None):
@@ -392,7 +495,66 @@ async def list_products(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch products: {e}")
 
+@app.get("/analytics/{product_id}")
+async def analytics_api(product_id: str):
+    """
+    Returns:
+    - Product details
+    - Full price history
+    - Retailer prices (if needed)
+    """
 
+    es = await get_es()
+
+    # 1) Fetch product
+    try:
+        product_resp = await es.get(index=PRODUCT_INDEX, id=product_id)
+        product = product_resp["_source"]
+    except NotFoundError:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    # 2) Fetch price history
+    hist_query = {
+        "size": 1000,
+        "query": {"term": {"product_id": product_id}},
+        "sort": [{"scraped_at": {"order": "asc"}}]
+    }
+
+    hist_resp = await es.search(index=PRICE_HISTORY_INDEX, body=hist_query)
+    price_history = [h["_source"] for h in hist_resp["hits"]["hits"]]
+
+    # 3) Retailer comparison (if you index them)
+    # OPTIONAL: If you do not have retailer index, return empty []
+    retailer_prices = []   # or load from ES if available
+
+    return {
+        "product": product,
+        "price_history": price_history,
+        "retailer_prices": retailer_prices
+    }
+
+@app.get("/user/products")
+async def get_user_products(user_id: str):
+    """
+    Returns product list belonging to a specific user.
+    Lighter version of /dashboard (no price history).
+    """
+    es = await get_es()
+
+    query = {
+        "size": 300,
+        "query": {
+            "term": {"user_id": user_id}
+        },
+        "sort": [{"scraped_at": {"order": "desc"}}]
+    }
+
+    try:
+        resp = await es.search(index=PRODUCT_INDEX, body=query)
+        results = [h["_source"] for h in resp["hits"]["hits"]]
+        return {"products": results}
+    except Exception as e:
+        raise HTTPException(500, f"Failed to fetch user products: {e}")
 
 # -------------------------------
 # Health Check
