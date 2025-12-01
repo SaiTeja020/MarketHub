@@ -1,0 +1,20 @@
+{
+  "name": "MarketHub DevContainer",
+  "image": "mcr.microsoft.com/devcontainers/universal:2",
+
+  "features": {
+    "docker-in-docker": "latest"
+  },
+
+  "runArgs": [
+    "--privileged"
+  ],
+
+  "postCreateCommand": "sudo service docker start",
+
+  "mounts": [
+    "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind"
+  ],
+
+  "remoteUser": "codespace"
+}
