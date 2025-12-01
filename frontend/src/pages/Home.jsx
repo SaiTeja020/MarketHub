@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase.js";
+import api from "../lib/api.js";
+
 import {
   LineChart,
   Line,
@@ -12,33 +14,13 @@ import {
   AreaChart,
 } from "recharts";
 
-/**
- * Dashboard (Home) page
- *
- * - Fetches the current user, products, and price_history from Supabase
- * - Calculates:
- *   - tracked products count
- *   - price drops in last 24h (compares latest vs previous price per product)
- *   - avg saving (based on lowest_price vs current_price across tracked items)
- * - Shows Recent Price Changes list (latest delta per product)
- * - Shows Featured Trend (30-day history) for the top changed product (fallback placeholder)
- *
- * NOTE: this expects the following tables and fields (as discussed earlier):
- * - products(id, user_id, title, url, image_url, current_price, lowest_price, highest_price, created_at)
- * - price_history(id, product_id, price, tracked_at)
- *
- * The uploaded screenshot is used as a fallback/placeholder image:
- * /mnt/data/Screenshot 2025-11-23 223800.png
- */
-
 export default function Home() {
   const [loading, setLoading] = useState(true);
   const [products, setProducts] = useState([]);
-  const [priceHistory, setPriceHistory] = useState([]); // array of { product_id, price, tracked_at }
+  const [priceHistory, setPriceHistory] = useState([]);
   const [error, setError] = useState("");
   const [featuredProductId, setFeaturedProductId] = useState(null);
 
-  // fetch everything on mount
   useEffect(() => {
     let mounted = true;
 
@@ -46,7 +28,7 @@ export default function Home() {
       setLoading(true);
       setError("");
 
-      // Get current user
+      // 1) get user via Supabase Auth (auth only)
       const {
         data: { user },
         error: userErr,
@@ -58,180 +40,149 @@ export default function Home() {
         return;
       }
 
-      const userId = user.id;
-
       try {
-        // 1) fetch products for user
-        const { data: productsData, error: prodErr } = await supabase
-          .from("products")
-          .select(
-            `id, title, url, image_url, current_price, lowest_price, highest_price, created_at`
-          )
-          .eq("user_id", userId)
-          .order("created_at", { ascending: false });
-
-        if (prodErr) throw prodErr;
-
-        // gather product ids
-        const productIds = (productsData || []).map((p) => p.id);
-        let priceHistoryData = [];
-
-        if (productIds.length) {
-          // 2) fetch recent price history for these products (last 90 days or all)
-          // we'll fetch last 90 entries per product by retrieving all and trimming client-side
-          const { data: phData, error: phErr } = await supabase
-            .from("price_history")
-            .select("id, product_id, price, tracked_at")
-            .in("product_id", productIds)
-            .order("tracked_at", { ascending: true }); // ascending for timeseries
-
-          if (phErr) throw phErr;
-          priceHistoryData = phData || [];
-        }
-
-        if (!mounted) return;
-        setProducts(productsData || []);
-        setPriceHistory(priceHistoryData || []);
-
-        // pick featured product: choose product with largest absolute % change in last 30 days (fallback to first)
-        const productChangeScores = {};
-        const now = new Date();
-        const ms30 = 30 * 24 * 60 * 60 * 1000;
-
-        productsData.forEach((p) => {
-          const phForP = priceHistoryData.filter((r) => r.product_id === p.id);
-          if (phForP.length >= 2) {
-            // find earliest point within last 30 days (or earliest available)
-            const cutoff = new Date(now - ms30);
-            const recentPoints = phForP.filter(
-              (r) => new Date(r.tracked_at) >= cutoff
-            );
-
-            // if no recentPoints, compare first and last
-            const baseline = recentPoints.length
-              ? recentPoints[0].price
-              : phForP[0].price;
-            const latest = phForP[phForP.length - 1].price;
-
-            // guard numeric
-            const baselineN = Number(baseline) || 0;
-            const latestN = Number(latest) || 0;
-            const pct =
-              baselineN === 0 ? Math.abs(latestN) : Math.abs((latestN - baselineN) / baselineN);
-
-            productChangeScores[p.id] = pct;
-          } else {
-            productChangeScores[p.id] = 0;
-          }
+        // 2) fetch dashboard data from backend
+        const resp = await api.get("/dashboard", {
+          params: { user_id: user.id },
         });
 
-        // choose highest score
-        const entries = Object.entries(productChangeScores);
-        if (entries.length) {
-          entries.sort((a, b) => b[1] - a[1]);
-          setFeaturedProductId(entries[0][0]);
-        } else if (productsData[0]) {
-          setFeaturedProductId(productsData[0].id);
+        if (!mounted) return;
+
+        const prods = resp.data.products || [];
+        const hist = resp.data.price_history || [];
+
+        setProducts(prods);
+        setPriceHistory(hist);
+
+        // ----- Featured Product Calculation -----
+        const productChangeScores = {};
+        const now = new Date();
+        const cutoff30 = new Date(now - 30 * 24 * 60 * 60 * 1000);
+
+        prods.forEach((p) => {
+          const ph = hist.filter((r) => r.product_id === p.product_id);
+          if (ph.length < 2) {
+            productChangeScores[p.product_id] = 0;
+            return;
+          }
+
+          const recent = ph.filter((r) => new Date(r.scraped_at) >= cutoff30);
+          const baseline = recent.length ? recent[0].price : ph[0].price;
+          const latest = ph[ph.length - 1].price;
+
+          const base = Number(baseline) || 0;
+          const last = Number(latest) || 0;
+          const pct = base === 0 ? Math.abs(last) : Math.abs((last - base) / base);
+
+          productChangeScores[p.product_id] = pct;
+        });
+
+        const sorted = Object.entries(productChangeScores).sort(
+          (a, b) => b[1] - a[1]
+        );
+
+        if (sorted.length > 0) {
+          setFeaturedProductId(sorted[0][0]);
+        } else if (prods[0]) {
+          setFeaturedProductId(prods[0].product_id);
         }
 
         setLoading(false);
       } catch (err) {
         console.error(err);
-        setError(err.message || "Failed to load dashboard data.");
+        setError(err.message || "Failed to load dashboard data");
         setLoading(false);
       }
     }
 
     load();
-
     return () => {
       mounted = false;
     };
   }, []);
 
-  // derived calculations
+  // -------- Derived Values ---------
 
-  // tracked products count
   const trackedCount = products.length;
 
-  // compute latest price per product and previous price to detect drops
   const latestByProduct = useMemo(() => {
     const map = {};
-    // priceHistory is ascending by tracked_at
-    priceHistory.forEach((r) => {
-      map[r.product_id] = map[r.product_id] || [];
-      map[r.product_id].push(r);
+    priceHistory.forEach((h) => {
+      if (!map[h.product_id]) map[h.product_id] = [];
+      map[h.product_id].push(h);
     });
 
-    const result = {};
-    for (const pid of Object.keys(map)) {
+    const out = {};
+    for (const pid in map) {
       const arr = map[pid];
-      const latest = arr[arr.length - 1];
-      const prev = arr.length >= 2 ? arr[arr.length - 2] : null;
-      result[pid] = { latest, prev, all: arr };
+      out[pid] = {
+        all: arr,
+        latest: arr[arr.length - 1],
+        prev: arr.length >= 2 ? arr[arr.length - 2] : null,
+      };
     }
-    return result;
+    return out;
   }, [priceHistory]);
 
-  // price drops in last 24h: count products where latest price < price 24h ago (we'll compare last two points and ensure one is within 24h)
   const priceDropsLast24h = useMemo(() => {
-    const now = Date.now();
     let count = 0;
-    for (const p of products) {
-      const info = latestByProduct[p.id];
-      if (!info || !info.latest) continue;
-      const latestTime = new Date(info.latest.tracked_at).getTime();
-      if (!info.prev) continue;
-      const prevTime = new Date(info.prev.tracked_at).getTime();
-      const elapsed = now - prevTime;
-      // only consider if prev point was within last 24h (86400000 ms)
-      if (elapsed <= 24 * 60 * 60 * 1000) {
-        const latestPrice = Number(info.latest.price) || 0;
-        const prevPrice = Number(info.prev.price) || 0;
-        if (latestPrice < prevPrice) count += 1;
+    const now = Date.now();
+
+    products.forEach((p) => {
+      const info = latestByProduct[p.product_id];
+      if (!info || !info.latest || !info.prev) return;
+
+      const prevTime = new Date(info.prev.scraped_at).getTime();
+      if (now - prevTime <= 86400000) {
+        const latest = Number(info.latest.price) || 0;
+        const prev = Number(info.prev.price) || 0;
+        if (latest < prev) count++;
       }
-    }
+    });
+
     return count;
   }, [products, latestByProduct]);
 
-  // avg saving: average of ((highest_price - current_price) / highest_price) across products, expressed percent (guard divide-by-zero)
   const avgSavingPct = useMemo(() => {
     if (!products.length) return 0;
-    let totalPct = 0;
+
+    let total = 0;
     let count = 0;
+
     products.forEach((p) => {
       const highest = Number(p.highest_price) || 0;
       const current = Number(p.current_price) || 0;
       if (highest > 0) {
-        const pct = ((highest - current) / highest) * 100;
-        totalPct += pct;
+        total += ((highest - current) / highest) * 100;
         count++;
       }
     });
-    if (!count) return 0;
-    return +(totalPct / count).toFixed(2);
+
+    return count ? +(total / count).toFixed(2) : 0;
   }, [products]);
 
-  // Recent price changes list (sorted by latest tracked_at desc)
   const recentChanges = useMemo(() => {
     const arr = [];
+
     products.forEach((p) => {
-      const info = latestByProduct[p.id];
+      const info = latestByProduct[p.product_id];
+
       if (!info || !info.latest) {
-        // no history, use current price
         arr.push({
           product: p,
           latestPrice: Number(p.current_price) || 0,
           prevPrice: null,
           trend: "neutral",
-          tracked_at: p.created_at,
+          tracked_at: p.scraped_at,
         });
         return;
       }
+
       const latest = Number(info.latest.price) || 0;
       const prev = info.prev ? Number(info.prev.price) || 0 : null;
+
       let trend = "neutral";
-      if (prev !== null) {
+      if (prev != null) {
         if (latest < prev) trend = "down";
         else if (latest > prev) trend = "up";
       }
@@ -241,38 +192,34 @@ export default function Home() {
         latestPrice: latest,
         prevPrice: prev,
         trend,
-        tracked_at: info.latest.tracked_at,
+        tracked_at: info.latest.scraped_at,
       });
     });
 
-    // sort by tracked_at desc
-    arr.sort((a, b) => new Date(b.tracked_at) - new Date(a.tracked_at));
-    return arr.slice(0, 6); // show top 6
+    return arr.sort(
+      (a, b) => new Date(b.tracked_at) - new Date(a.tracked_at)
+    ).slice(0, 6);
   }, [products, latestByProduct]);
 
-  // featured product history (last 30 points) for chart
   const featuredHistory = useMemo(() => {
     if (!featuredProductId) return [];
+
     const info = latestByProduct[featuredProductId];
     if (!info) return [];
-    const arr = info.all || [];
-    // take last 30 entries
-    const last30 = arr.slice(Math.max(arr.length - 30, 0));
-    // map to chart-friendly objects { date, price }
-    return last30.map((r) => ({
-      date: new Date(r.tracked_at).toLocaleDateString(),
+
+    return info.all.slice(-30).map((r) => ({
+      date: new Date(r.scraped_at).toLocaleDateString(),
       price: Number(r.price) || 0,
     }));
   }, [featuredProductId, latestByProduct]);
 
-  // featured product metadata
-  const featuredProduct = useMemo(
-    () => products.find((p) => p.id === featuredProductId) || null,
-    [products, featuredProductId]
+  const featuredProduct = products.find(
+    (p) => p.product_id === featuredProductId
   );
 
-  // image fallback (use uploaded screenshot path)
   const placeholderImage = "/mnt/data/Screenshot 2025-11-23 223800.png";
+
+  // ------------ UI --------------
 
   return (
     <div className="p-8 bg-gray-50 min-h-screen">
@@ -287,159 +234,121 @@ export default function Home() {
 
         {/* Stats Row */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-          <div className="bg-white p-6 rounded-lg shadow-sm flex justify-between items-center">
-            <div>
-              <p className="text-xs text-gray-500">Tracked Products</p>
-              <p className="text-2xl font-semibold text-gray-900">{trackedCount}</p>
-              <p className="text-xs text-green-600 mt-1">Active monitors</p>
-            </div>
-            <div className="p-2 bg-slate-50 rounded-full">
-              {/* bell icon */}
-              <svg className="w-6 h-6 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6 6 0 10-12 0v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
-              </svg>
-            </div>
-          </div>
-
-          <div className="bg-white p-6 rounded-lg shadow-sm flex justify-between items-center">
-            <div>
-              <p className="text-xs text-gray-500">Price Drops</p>
-              <p className="text-2xl font-semibold text-gray-900">{priceDropsLast24h}</p>
-              <p className="text-xs text-green-600 mt-1">In the last 24h</p>
-            </div>
-            <div className="p-2 bg-slate-50 rounded-full">
-              {/* down arrow */}
-              <svg className="w-6 h-6 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 17l-5-5m0 0l5-5m-5 5h12" />
-              </svg>
-            </div>
-          </div>
-
-          <div className="bg-white p-6 rounded-lg shadow-sm flex justify-between items-center">
-            <div>
-              <p className="text-xs text-gray-500">Avg. Saving</p>
-              <p className="text-2xl font-semibold text-gray-900">{avgSavingPct}%</p>
-              <p className="text-xs text-gray-500 mt-1">Across tracked items</p>
-            </div>
-            <div className="p-2 bg-slate-50 rounded-full">
-              {/* percent icon */}
-              <svg className="w-6 h-6 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M18 12a6 6 0 11-12 0 6 6 0 0112 0zM21 3l-6 6" />
-              </svg>
-            </div>
-          </div>
+          <StatCard label="Tracked Products" value={trackedCount} color="blue" />
+          <StatCard label="Price Drops (24h)" value={priceDropsLast24h} color="green" />
+          <StatCard label="Avg. Saving" value={`${avgSavingPct}%`} color="gray" />
         </div>
 
-        {/* Main content two columns */}
+        {/* Two-Column Layout */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Left: Recent Price Changes */}
-          <div className="bg-white rounded-lg shadow-sm p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-medium text-gray-900">Recent Price Changes</h3>
-              <a href="/tracker" className="text-sm text-sky-600">View All</a>
-            </div>
+          {/* Recent Price Changes */}
+          <RecentChanges recentChanges={recentChanges} placeholderImage={placeholderImage} loading={loading} error={error} />
 
-            {loading ? (
-              <div className="space-y-4">
-                <div className="h-16 bg-gray-100 rounded" />
-                <div className="h-16 bg-gray-100 rounded" />
-                <div className="h-16 bg-gray-100 rounded" />
-              </div>
-            ) : error ? (
-              <p className="text-sm text-red-600">{error}</p>
-            ) : recentChanges.length === 0 ? (
-              <p className="text-sm text-gray-600">No tracked products yet.</p>
-            ) : (
-              <div className="space-y-3">
-                {recentChanges.map((item) => (
-                  <div key={item.product.id} className="flex items-center justify-between p-3 rounded border border-gray-100">
-                    <div className="flex items-center space-x-3">
-                      <img
-                        src={item.product.image_url || placeholderImage}
-                        alt={item.product.title}
-                        className="h-12 w-12 rounded object-cover"
-                      />
-                      <div>
-                        <div className="text-sm font-semibold text-gray-900">
-                          {item.product.title}
-                        </div>
-                        <div className="text-xs text-gray-500">{new URL(item.product.url || "https://example.com").hostname.replace("www.", "")}</div>
-                      </div>
-                    </div>
-
-                    <div className="text-right">
-                      <div className={`text-sm font-semibold ${item.trend === "down" ? "text-green-600" : item.trend === "up" ? "text-red-600" : "text-gray-900"}`}>
-                        ₹{Number(item.latestPrice).toLocaleString()}
-                        {item.trend === "down" ? " ↓" : item.trend === "up" ? " ↑" : ""}
-                      </div>
-                      {item.prevPrice !== null && (
-                        <div className="text-xs text-gray-400 line-through">
-                          ₹{Number(item.prevPrice).toLocaleString()}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Right: Featured Trend */}
-          <div className="bg-white rounded-lg shadow-sm p-6 flex flex-col">
-            <div className="flex items-start justify-between mb-4">
-              <div>
-                <h3 className="text-lg font-medium text-gray-900">
-                  Featured Trend
-                </h3>
-                <div className="text-sm text-gray-500">
-                  {featuredProduct ? featuredProduct.title : "—"}
-                </div>
-              </div>
-              <div className="text-sm text-sky-600">
-                30 Day History
-              </div>
-            </div>
-
-            <div className="flex-1 min-h-[220px]">
-              {loading ? (
-                <div className="h-56 bg-gray-100 rounded" />
-              ) : featuredHistory.length === 0 ? (
-                <div className="h-56 flex items-center justify-center">
-                  <div className="text-sm text-gray-500">No history to show</div>
-                </div>
-              ) : (
-                <ResponsiveContainer width="100%" height={280}>
-                  <AreaChart data={featuredHistory}>
-                    <defs>
-                      <linearGradient id="colorPrice" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#38bdf8" stopOpacity={0.4}/>
-                        <stop offset="95%" stopColor="#38bdf8" stopOpacity={0}/>
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-                    <XAxis dataKey="date" tick={{ fontSize: 12 }} />
-                    <YAxis tickFormatter={(v) => `₹${v}`} />
-                    <Tooltip formatter={(value) => `₹${Number(value).toLocaleString()}`} />
-                    <Area type="monotone" dataKey="price" stroke="#0284c7" fill="url(#colorPrice)" />
-                  </AreaChart>
-                </ResponsiveContainer>
-              )}
-            </div>
-
-            <div className="mt-4 flex items-center justify-between">
-              <div className="text-sm text-gray-500">Showing latest 30 points</div>
-              <a
-                href={featuredProduct?.url || "#"}
-                target="_blank"
-                rel="noreferrer"
-                className="text-sky-600 text-sm"
-              >
-                Open product
-              </a>
-            </div>
-          </div>
+          {/* Featured Trend */}
+          <FeaturedTrend featuredProduct={featuredProduct} featuredHistory={featuredHistory} loading={loading} />
         </div>
       </div>
     </div>
   );
+}
+
+/* ----- Helper Components (Same UI, cleaner code) ----- */
+
+function StatCard({ label, value, color }) {
+  return (
+    <div className="bg-white p-6 rounded-lg shadow-sm flex justify-between items-center">
+      <div>
+        <p className="text-xs text-gray-500">{label}</p>
+        <p className="text-2xl font-semibold text-gray-900">{value}</p>
+      </div>
+    </div>
+  );
+}
+
+function RecentChanges({ recentChanges, placeholderImage, loading, error }) {
+  if (loading)
+    return <div className="space-y-4"><Skeleton /><Skeleton /><Skeleton /></div>;
+
+  if (error) return <p className="text-red-600">{error}</p>;
+
+  if (recentChanges.length === 0)
+    return <p className="text-sm text-gray-600">No tracked products yet.</p>;
+
+  return (
+    <div className="bg-white rounded-lg shadow-sm p-6">
+      <h3 className="text-lg font-medium text-gray-900 mb-4">Recent Price Changes</h3>
+
+      <div className="space-y-3">
+        {recentChanges.map((item) => (
+          <div key={item.product.product_id} className="flex justify-between p-3 border rounded">
+            <div className="flex items-center space-x-3">
+              <img
+                src={item.product.image_url || placeholderImage}
+                className="h-12 w-12 rounded object-cover"
+              />
+              <div>
+                <div className="font-semibold">{item.product.title}</div>
+                <div className="text-xs text-gray-500">
+                  {new URL(item.product.url).hostname.replace("www.", "")}
+                </div>
+              </div>
+            </div>
+
+            <div className="text-right">
+              <div className={`text-sm font-semibold ${
+                item.trend === "down" ? "text-green-600" :
+                item.trend === "up" ? "text-red-600" :
+                "text-gray-900"
+              }`}>
+                ₹{item.latestPrice.toLocaleString()}
+                {item.trend === "down" ? " ↓" : item.trend === "up" ? " ↑" : ""}
+              </div>
+              {item.prevPrice !== null && (
+                <div className="text-xs line-through text-gray-400">
+                  ₹{item.prevPrice.toLocaleString()}
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function FeaturedTrend({ featuredProduct, featuredHistory, loading }) {
+  return (
+    <div className="bg-white rounded-lg shadow-sm p-6 flex flex-col">
+      <h3 className="text-lg font-medium text-gray-900">Featured Trend</h3>
+      <p className="text-sm text-gray-500">{featuredProduct?.title || "—"}</p>
+
+      <div className="mt-4 flex-1 min-h-[220px]">
+        {loading ? (
+          <div className="h-56 bg-gray-100 rounded" />
+        ) : featuredHistory.length === 0 ? (
+          <div className="h-56 flex items-center justify-center text-gray-500">No history</div>
+        ) : (
+          <ResponsiveContainer width="100%" height={280}>
+            <AreaChart data={featuredHistory}>
+              <defs>
+                <linearGradient id="colorPrice" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#38bdf8" stopOpacity={0.4} />
+                  <stop offset="95%" stopColor="#38bdf8" stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+              <XAxis dataKey="date" />
+              <YAxis tickFormatter={(v) => `₹${v}`} />
+              <Tooltip formatter={(v) => `₹${v.toLocaleString()}`} />
+              <Area type="monotone" dataKey="price" stroke="#0284c7" fill="url(#colorPrice)" />
+            </AreaChart>
+          </ResponsiveContainer>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Skeleton() {
+  return <div className="h-16 bg-gray-100 rounded animate-pulse" />;
 }
