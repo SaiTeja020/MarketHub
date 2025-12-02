@@ -20,7 +20,8 @@ import os
 import asyncio
 from typing import Optional, List, Dict, Any
 
-from elasticsearch import AsyncElasticsearch, ElasticsearchException, NotFoundError
+from elasticsearch import AsyncElasticsearch
+from elasticsearch.exceptions import ApiError, NotFoundError
 
 ELASTIC_URL = os.getenv("ELASTIC_URL", "http://elasticsearch:9200")
 PRODUCT_INDEX = os.getenv("PRODUCT_INDEX", "products")
@@ -48,46 +49,43 @@ async def get_es() -> AsyncElasticsearch:
 # ----------------------
 
 PRODUCT_MAPPING = {
-    "mappings": {
-        "properties": {
-            "product_id": {"type": "keyword"},
-            "title": {"type": "text", "analyzer": "standard"},
-            "url": {"type": "keyword"},
-            "source": {"type": "keyword"},
-            "current_price": {"type": "double"},
-            "currency": {"type": "keyword"},
-            "image_url": {"type": "keyword"},
-            "metadata": {"type": "object", "enabled": False},  # keep raw
-            "scraped_at": {"type": "date"},
-            "raw_html": {"type": "text", "index": False}  # store but don't index
-        }
+    "properties": {
+        "product_id": {"type": "keyword"},
+        "title": {"type": "text", "analyzer": "standard"},
+        "url": {"type": "keyword"},
+        "source": {"type": "keyword"},
+        "current_price": {"type": "double"},
+        "currency": {"type": "keyword"},
+        "image_url": {"type": "keyword"},
+        "metadata": {"type": "object", "enabled": False},
+        "scraped_at": {"type": "date"},
+        "raw_html": {"type": "text", "index": False}
     }
 }
+
 
 ANALYSIS_MAPPING = {
-    "mappings": {
-        "properties": {
-            "task_id": {"type": "keyword"},
-            "product_id": {"type": "keyword"},
-            "credibility_score": {"type": "double"},
-            "reasons": {"type": "text"},
-            "analysis_payload": {"type": "object", "enabled": False},
-            "completed_at": {"type": "date"}
-        }
+    "properties": {
+        "task_id": {"type": "keyword"},
+        "product_id": {"type": "keyword"},
+        "credibility_score": {"type": "double"},
+        "reasons": {"type": "text"},
+        "analysis_payload": {"type": "object", "enabled": False},
+        "completed_at": {"type": "date"}
     }
 }
 
+
 PRICE_HISTORY_MAPPING = {
-    "mappings": {
-        "properties": {
-            "product_id": {"type": "keyword"},
-            "price": {"type": "double"},
-            "currency": {"type": "keyword"},
-            "scraped_at": {"type": "date"},
-            "source": {"type": "keyword"}
-        }
+    "properties": {
+        "product_id": {"type": "keyword"},
+        "price": {"type": "double"},
+        "currency": {"type": "keyword"},
+        "scraped_at": {"type": "date"},
+        "source": {"type": "keyword"}
     }
 }
+
 
 
 # ----------------------
@@ -98,8 +96,8 @@ async def ensure_index(es: AsyncElasticsearch, index_name: str, mapping: Dict[st
     try:
         exists = await es.indices.exists(index=index_name)
         if not exists:
-            await es.indices.create(index=index_name, body=mapping)
-    except ElasticsearchException as e:
+            await es.indices.create(index=index_name, mappings=mapping)
+    except ApiError as e:
         raise RuntimeError(f"Failed to ensure index {index_name}: {e}") from e
 
 
@@ -140,7 +138,7 @@ async def index_scraped_product(product_doc: Dict[str, Any], doc_id: Optional[st
             params["refresh"] = "true"
         resp = await es.index(**params)
         return resp
-    except ElasticsearchException as e:
+    except ApiError as e:
         raise RuntimeError(f"Failed to index product doc: {e}") from e
 
 
@@ -159,7 +157,7 @@ async def index_analysis_result(task_id: str, analysis_doc: Dict[str, Any], doc_
             params["refresh"] = "true"
         resp = await es.index(**params)
         return resp
-    except ElasticsearchException as e:
+    except ApiError as e:
         raise RuntimeError(f"Failed to index analysis doc: {e}") from e
     
 async def index_price_history(product_id: str, price: float, currency: str, source: str, scraped_at: str):
@@ -178,7 +176,7 @@ async def index_price_history(product_id: str, price: float, currency: str, sour
 
     try:
         return await es.index(index=PRICE_HISTORY_INDEX, document=doc)
-    except ElasticsearchException as e:
+    except ApiError as e:
         raise RuntimeError(f"Failed to index price history: {e}")
 
 
@@ -210,7 +208,7 @@ async def search_products(query: str, size: int = 10, source_filter: Optional[st
         return resp
     except NotFoundError:
         return {"hits": {"total": 0, "hits": []}}
-    except ElasticsearchException as e:
+    except ApiError as e:
         raise RuntimeError(f"Search failed: {e}") from e
 
 
@@ -239,7 +237,7 @@ async def bulk_index_products(docs: List[Dict[str, Any]], id_field: str = "produ
     try:
         success, errors = await async_bulk(client=es, actions=gen_actions(), chunk_size=chunk_size)
         return {"success": success, "errors": errors}
-    except ElasticsearchException as e:
+    except ApiError as e:
         raise RuntimeError(f"Bulk index failed: {e}") from e
 
 

@@ -1,15 +1,31 @@
-# python requirements
+# Web Framework
 fastapi
 uvicorn[standard]
+
+# Serialization / Validation
 pydantic
-redis
+
+# Redis (async)
+redis>=4.2
+
+# RabbitMQ (Python-side communication)
+aio-pika
+
+# Celery worker
 celery
-pymongo
-requests
+
+# HTTP Clients
+httpx
 aiohttp
+
+# HTML Parsing
 beautifulsoup4
-scrapy
-elasticsearch
+
+# Elasticsearch 8 (Async client)
+elasticsearch[async]>=8.6.0
+
+# Environment Variables
 python-dotenv
+
+# PostgreSQL (Supabase)
 psycopg2-binary
-elasticsearch>=8.6.0
