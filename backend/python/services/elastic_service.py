@@ -49,42 +49,51 @@ async def get_es() -> AsyncElasticsearch:
 # ----------------------
 
 PRODUCT_MAPPING = {
-    "properties": {
-        "product_id": {"type": "keyword"},
-        "title": {"type": "text", "analyzer": "standard"},
-        "url": {"type": "keyword"},
-        "source": {"type": "keyword"},
-        "current_price": {"type": "double"},
-        "currency": {"type": "keyword"},
-        "image_url": {"type": "keyword"},
-        "metadata": {"type": "object", "enabled": False},
-        "scraped_at": {"type": "date"},
-        "raw_html": {"type": "text", "index": False}
+    "mappings": {
+        "properties": {
+            "product_id": {"type": "keyword"},
+            "title": {"type": "text"},
+            "url": {"type": "keyword"},
+            "source": {"type": "keyword"},
+            "current_price": {"type": "double"},
+            "currency": {"type": "keyword"},
+            "image_url": {"type": "keyword"},
+            "metadata": {"type": "object", "enabled": False},
+            "scraped_at": {"type": "date"},
+            "raw_html": {"type": "text", "index": False}
+        }
     }
 }
+
 
 
 ANALYSIS_MAPPING = {
-    "properties": {
-        "task_id": {"type": "keyword"},
-        "product_id": {"type": "keyword"},
-        "credibility_score": {"type": "double"},
-        "reasons": {"type": "text"},
-        "analysis_payload": {"type": "object", "enabled": False},
-        "completed_at": {"type": "date"}
+    "mappings": {
+        "properties": {
+            "task_id": {"type": "keyword"},
+            "product_id": {"type": "keyword"},
+            "credibility_score": {"type": "double"},
+            "reasons": {"type": "text"},
+            "analysis_payload": {"type": "object", "enabled": False},
+            "completed_at": {"type": "date"}
+        }
     }
 }
+
 
 
 PRICE_HISTORY_MAPPING = {
-    "properties": {
-        "product_id": {"type": "keyword"},
-        "price": {"type": "double"},
-        "currency": {"type": "keyword"},
-        "scraped_at": {"type": "date"},
-        "source": {"type": "keyword"}
+    "mappings": {
+        "properties": {
+            "product_id": {"type": "keyword"},
+            "price": {"type": "double"},
+            "currency": {"type": "keyword"},
+            "scraped_at": {"type": "date"},
+            "source": {"type": "keyword"}
+        }
     }
 }
+
 
 
 
@@ -96,7 +105,14 @@ async def ensure_index(es: AsyncElasticsearch, index_name: str, mapping: Dict[st
     try:
         exists = await es.indices.exists(index=index_name)
         if not exists:
-            await es.indices.create(index=index_name, mappings=mapping)
+            await es.indices.create(
+                index=index_name,
+                 body={
+                    "mappings":{
+                        "properties":mapping["mappings"]["properties"]
+                    }
+                 }
+            )
     except ApiError as e:
         raise RuntimeError(f"Failed to ensure index {index_name}: {e}") from e
 
