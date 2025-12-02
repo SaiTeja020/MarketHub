@@ -68,7 +68,7 @@ services:
       - RABBIT_URL=amqp://admin:admin@rabbitmq:5672//
       - ELASTIC_URL=http://elasticsearch:9200
       - NODE_SCRAPER_URL=http://node_api:5000
-      - DATABASE_URL=postgres...your_supabase_url...
+      - DATABASE_URL=${DATABASE_URL}
     restart: always
 
 volumes:

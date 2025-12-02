@@ -1,8 +1,10 @@
 // src/lib/api.js
 import axios from "axios";
 
+const BASE_URL = import.meta.env.VITE_API_URL || "http://fastapi:8000";
+
 const api = axios.create({
-  baseURL: "http://localhost:8000",  // works on Vite + backend proxy
+  baseURL: BASE_URL,
   timeout: 10000,
 });
 
@@ -14,8 +16,6 @@ api.interceptors.request.use(async (config) => {
 });
 
 export default api;
-
-const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 export async function startScrape(url, source) {
   const res = await fetch(`${BASE_URL}/scrape`, {
