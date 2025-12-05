@@ -29,7 +29,7 @@ services:
     ports:
       - "9200:9200"
     volumes:
-        - es_data:/user/share/elasticsearch/data
+        - es_data:/usr/share/elasticsearch/data
     restart: unless-stopped
     ulimits:
       memlock:
