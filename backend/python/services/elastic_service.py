@@ -40,7 +40,14 @@ async def get_es() -> AsyncElasticsearch:
     if _es_client is None:
         async with _es_lock:
             if _es_client is None:
-                _es_client = AsyncElasticsearch(hosts=[ELASTIC_URL])
+                # Use the ELASTIC_URL string as host (http://elasticsearch:9200)
+                _es_client = AsyncElasticsearch(
+                    hosts=[ELASTIC_URL],
+                    max_retries=3,
+                    retry_on_timeout=True,
+                    request_timeout=30,
+                )
+                print("Elasticsearch client created with host:", ELASTIC_URL)
     return _es_client
 
 
@@ -105,16 +112,20 @@ async def ensure_index(es: AsyncElasticsearch, index_name: str, mapping: Dict[st
     try:
         exists = await es.indices.exists(index=index_name)
         if not exists:
-            await es.indices.create(
-                index=index_name,
-                 body={
-                    "mappings":{
-                        "properties":mapping["mappings"]["properties"]
-                    }
-                 }
-            )
+            # Use the mapping dict directly (mapping already contains "mappings": {...})
+            try:
+                resp = await es.indices.create(index=index_name, body=mapping)
+                print(f"Elasticsearch: created index {index_name}: {resp}")
+            except ApiError as e:
+                # Print full error info returned by the client so we can see ES's message
+                info = getattr(e, "info", None)
+                print(f"Elasticsearch ApiError while creating index {index_name}: status={getattr(e,'status_code',None)} info={info}")
+                raise RuntimeError(f"Failed to ensure index {index_name}: {e}") from e
     except ApiError as e:
+        info = getattr(e, "info", None)
+        print(f"Elasticsearch ApiError while checking exists() for {index_name}: status={getattr(e,'status_code',None)} info={info}")
         raise RuntimeError(f"Failed to ensure index {index_name}: {e}") from e
+
 
 
 async def ensure_indices():

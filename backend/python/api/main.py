@@ -21,7 +21,7 @@ from services.elastic_service import (
 from services.deal_service import compute_deal_score, generate_summary
 from services.elastic_service import PRICE_HISTORY_INDEX, ANALYSIS_INDEX, PRODUCT_INDEX
 
-from services.elastic_service import get_es, PRODUCT_INDEX, ANALYSIS_INDEX
+from services.elastic_service import get_es, PRODUCT_INDEX, ANALYSIS_INDEX, ensure_indices
 from elasticsearch import NotFoundError
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -71,6 +71,11 @@ class TrackProductRequest(BaseModel):
     source: str | None = None
     current_price: float | None = None
 
+# replace the original startup event that calls ensure_indices()
+# with this guarded version so the app starts even if ES index creation fails.
+
+
+
 @app.post("/user/add_product")
 async def add_user_product(req: TrackProductRequest):
     """
@@ -110,8 +115,11 @@ async def add_user_product(req: TrackProductRequest):
 
 @app.on_event("startup")
 async def startup_event():
-    # ensure Elasticsearch indices exist
-    await ensure_indices()
+    try:
+        await ensure_indices()
+    except Exception as e:
+        # Log full repr so we don't lose details; don't crash startup.
+        print("WARNING: ensure_indices() failed at startup:", repr(e))
 
 @app.on_event("shutdown")
 async def shutdown_event():
