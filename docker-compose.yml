@@ -6,6 +6,10 @@ services:
     container_name: redis_server
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 5
     volumes:
       - redis_data:/data
     restart: always
@@ -16,6 +20,10 @@ services:
     ports:
       - "5672:5672"
       - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "status"]
+      interval: 10s
+      retries: 5
     environment:
       RABBITMQ_DEFAULT_USER: admin
       RABBITMQ_DEFAULT_PASS: admin
@@ -28,8 +36,12 @@ services:
     container_name: elasticsearch_server
     ports:
       - "9200:9200"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200"]
+      interval: 10s
+      retries: 5
     volumes:
-        - es_data:/usr/share/elasticsearch/data
+      - es_data:/usr/share/elasticsearch/data
     restart: unless-stopped
     ulimits:
       memlock:
@@ -40,16 +52,22 @@ services:
       - xpack.security.enabled=false
       - ES_JAVA_OPTS=-Xms2g -Xmx2g
 
-
   node_api:
     build: ./backend/node
     container_name: node_app
     ports:
       - "5000:5000"
     depends_on:
-      - redis
-      - rabbitmq
-      - elasticsearch
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 10s
+      retries: 5
     environment:
       - REDIS_URL=redis://redis:6379/0
       - RABBIT_URL=amqp://admin:admin@rabbitmq:5672//
@@ -64,16 +82,20 @@ services:
     ports:
       - "8000:8000"
     depends_on:
-      - redis
-      - rabbitmq
-      - elasticsearch
-      - node_api
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      node_api:
+        condition: service_healthy
     environment:
       - REDIS_URL=redis://redis:6379/0
       - RABBIT_URL=amqp://admin:admin@rabbitmq:5672//
       - ELASTIC_URL=http://elasticsearch:9200
       - NODE_SCRAPER_URL=http://node_api:5000
-      - DATABASE_URL="postgresql://postgres.sfdzwhjgegdtlndsepxs:MarketHubPS853@aws-1-ap-northeast-1.pooler.supabase.com:6543/postgres?sslmode=require"
+      - DATABASE_URL=postgresql://postgres.sfdzwhjgegdtlndsepxs:MarketHubPS853@aws-1-ap-northeast-1.pooler.supabase.com:6543/postgres?sslmode=require
     restart: always
 
 volumes:
