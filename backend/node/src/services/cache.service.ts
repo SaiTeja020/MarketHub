@@ -1,34 +1,33 @@
-import { redis } from "../utils/redis";
-import { pushScrapeTask } from "./scraperQueue.service";
+// src/services/cache.service.ts
+import redisClient, { connectRedis } from "../utils/redis";
 
-const ONE_HOUR = 60 * 60 * 1000;
-const SIX_HOUR = 6 * ONE_HOUR;
-
+/**
+ * Retrieve product data from Redis cache
+ */
 export const getCachedProduct = async (productId: string) => {
-    const key = `product:${productId}`;
+  await connectRedis();
 
-    const cached = await redis.hGetAll(key);
-    if (!cached || !cached.updated_at) return null;
+  const data = await redisClient.get(`product:${productId}`);
 
-    const age = Date.now() - Number(cached.updated_at);
+  if (!data) return null;
 
-    if (age < ONE_HOUR) {
-        return { ...cached, _action: "fresh_cache" };
-    }
-
-    if (age >= ONE_HOUR && age < SIX_HOUR) {
-        pushScrapeTask(productId);
-        return { ...cached, _action: "stale_but_usable" };
-    }
-
+  try {
+    return JSON.parse(data);
+  } catch (err) {
+    console.error("❌ Failed to parse cached product JSON:", err);
     return null;
+  }
 };
 
-export const saveProductCache = async (productId: string, data: any) => {
-    const key = `product:${productId}`;
+/**
+ * Save product data into Redis cache
+ */
+export const saveProductCache = async (productId: string, productData: any) => {
+  await connectRedis();
 
-    await redis.hSet(key, {
-        ...data,
-        updated_at: Date.now().toString(),
-    });
+  await redisClient.set(
+    `product:${productId}`,
+    JSON.stringify(productData),
+    { EX: 3600 } // TTL: 1 hour
+  );
 };

@@ -1,15 +1,12 @@
-import pkg from "pg";
-import express from "express";
-const { Pool } = pkg;
+const { Pool } = require("pg");
+const express = require("express");
 const app = express();
-
 
 app.get("/health", (req, res) => res.send("OK"));
 
 app.listen(5000, "0.0.0.0", () => {
   console.log(`Server running on port 5000`);
 });
-
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
