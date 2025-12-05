@@ -65,13 +65,15 @@ services:
       elasticsearch:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
       interval: 10s
       retries: 5
     environment:
       - REDIS_URL=redis://redis:6379/0
       - RABBIT_URL=amqp://admin:admin@rabbitmq:5672//
       - ELASTIC_URL=http://elasticsearch:9200
+
+      - DATABASE_URL=postgresql://postgres.sfdzwhjgegdtlndsepxs:MarketHubPS853@aws-1-ap-northeast-1.pooler.supabase.com:6543/postgres?sslmode=require
     restart: always
 
   fastapi:

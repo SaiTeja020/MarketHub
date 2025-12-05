@@ -4,12 +4,10 @@ const { Pool } = pkg;
 const app = express();
 
 
-const PORT = 5000;
-
 app.get("/health", (req, res) => res.send("OK"));
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Server running on port ${PORT}`);
+app.listen(5000, "0.0.0.0", () => {
+  console.log(`Server running on port 5000`);
 });
 
 
