@@ -1,26 +1,22 @@
+// src/services/product.service.ts
 import { getCachedProduct, saveProductCache } from "./cache.service";
+import { scrapeProduct } from "../scraper/scrapeProduct"; // shared scraper function
 
-export const getProductData = async (productId: string) => {
-  // step 1: check redis
+export const getProductData = async (productId: string, url?: string) => {
+  // 1) check cache
   const cached = await getCachedProduct(productId);
-
   if (cached) return cached;
 
-  // step 2: scrape immediately
-  const scraped = await scrapeProduct(productId);
+  // 2) require url to scrape if not cached
+  if (!url) {
+    throw new Error("No cached product and no URL provided to perform scrape.");
+  }
 
-  // step 3: store new data
+  // 3) call shared scrapeProduct(taskId, url)
+  const scraped = await scrapeProduct(productId, url);
+
+  // 4) store into cache
   await saveProductCache(productId, scraped);
 
   return { ...scraped, _action: "fresh_scrape" };
 };
-
-// dummy
-async function scrapeProduct(id: string) {
-  return {
-    id,
-    title: "Sample",
-    price: Math.random() * 1000,
-    updated_at: Date.now(),
-  };
-}
