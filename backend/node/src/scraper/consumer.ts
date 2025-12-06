@@ -2,7 +2,7 @@
 import { connectQueue  } from "../utils/rabbitmq";
 import { getChannel } from "../services/scraperQueue.service";
 import redisClient, { connectRedis } from "../utils/redis";
-import { runScraper } from "./runScraper";
+import { scrapeProduct } from "./scrapeProduct";
 import type { ConsumeMessage } from "amqplib";
 
 (async () => {
@@ -60,7 +60,7 @@ import type { ConsumeMessage } from "amqplib";
         console.log(`➡️ Received scrape job (task_id=${task_id}) for url: ${url}`);
 
         // Run the scraper
-        const result = await runScraper(url);
+        const result = await scrapeProduct(task_id, url);
 
         // Ensure Redis is connected, then store result
         await connectRedis();

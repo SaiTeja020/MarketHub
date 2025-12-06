@@ -7,7 +7,14 @@ function extractId(url: string) {
 }
 
 export async function scrapeFlipkart(url: string) {
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: true ,
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--single-process",
+      "--disable-gpu",
+    ],});
   const page = await browser.newPage();
 
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
