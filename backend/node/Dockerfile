@@ -40,7 +40,7 @@ RUN npm run build
 
 # Install Playwright browsers (with deps). Minimal, safe single command.
 # This installs the browsers used by Playwright into the image.
-RUN npx playwright install --with-deps
+RUN npx playwright install chromium
 
 # remove dev deps to keep image smaller (optional)
 RUN npm prune --production
