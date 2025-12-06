@@ -100,8 +100,29 @@ services:
       - NODE_SCRAPER_URL=http://node_api:5000
       - DATABASE_URL=postgresql://postgres.sfdzwhjgegdtlndsepxs:MarketHubPS853@aws-1-ap-northeast-1.pooler.supabase.com:6543/postgres?sslmode=require
     restart: always
+  scraper:
+    build:
+      context: ./backend/node
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    shm_size: 1g
+    environment:
+      - NODE_ENV=production
+    volumes:
+      # optional: persist playwright browsers across container restarts
+      - scraper-playwright-browsers:/ms-playwright
+    depends_on:
+      - rabbitmq
+      - redis
+    # if you want logs on stdout:
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   redis_data:
   rabbitmq_data:
   es_data:
+  scraper-playwright-browsers:

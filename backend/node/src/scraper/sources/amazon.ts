@@ -14,14 +14,29 @@ export async function scrapeAmazon(url: string) {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
 
     const title = await page.locator("#productTitle").textContent().catch(() => null);
-    // try multiple price selectors as fallback
-    const priceSelectors = [".a-price .a-offscreen", ".a-price-whole", ".a-price"];
-    let priceText = null;
+
+    // Try a few selectors for price because Amazon markup varies
+    const priceSelectors = [
+      ".a-price .a-offscreen",
+      ".a-price-whole",
+      ".a-price-fraction",
+      "#priceblock_ourprice",
+      "#priceblock_dealprice"
+    ];
+
+    let priceText: string | null = null;
     for (const sel of priceSelectors) {
-      priceText = (await page.locator(sel).first().textContent().catch(() => null)) || priceText;
+      const t = await page.locator(sel).first().textContent().catch(() => null);
+      if (t) {
+        priceText = t;
+        break;
+      }
     }
 
-    const imageUrl = await page.locator("#landingImage").getAttribute("src").catch(() => null);
+    const imageUrl =
+      (await page.locator("#landingImage").getAttribute("src").catch(() => null)) ||
+      (await page.locator("#imgTagWrapperId img").first().getAttribute("src").catch(() => null)) ||
+      null;
 
     const price = parseInt((priceText || "").replace(/\D/g, "") || "0");
 
@@ -36,6 +51,10 @@ export async function scrapeAmazon(url: string) {
       scraped_at: new Date().toISOString()
     };
   } finally {
-    await page.close();
+    try {
+      await page.close();
+    } catch (err) {
+      // ignore close errors
+    }
   }
 }
