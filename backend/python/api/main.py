@@ -25,6 +25,8 @@ from services.elastic_service import get_es, PRODUCT_INDEX, ANALYSIS_INDEX, ensu
 from elasticsearch import NotFoundError
 from fastapi.middleware.cors import CORSMiddleware
 
+
+
 app = FastAPI(
     title="MarketHub API",
     description="Coordinator API for scraping, Gemini analysis, and Elasticsearch indexing",
@@ -37,7 +39,6 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",
         "http://127.0.0.1:5173",
-        "*",
     ],
     allow_credentials=True,
     allow_methods=["*"],
