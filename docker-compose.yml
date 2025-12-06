@@ -108,6 +108,8 @@ services:
     shm_size: 1g
     environment:
       - NODE_ENV=production
+      - REDIS_URL=redis://redis:6379/0
+      - RABBIT_URL=amqp://admin:admin@rabbitmq:5672//
     volumes:
       # optional: persist playwright browsers across container restarts
       - scraper-playwright-browsers:/ms-playwright
