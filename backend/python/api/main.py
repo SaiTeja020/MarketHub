@@ -144,6 +144,7 @@ async def add_user_product(req: TrackProductRequest):
     # 2) Fire-and-forget enqueue into RabbitMQ so worker will scrape
     payload = {
         "task_id": str(uuid.uuid4()),
+        "user_id": req.user_id,
         "url": decoded_url,
         "source": (req.source or "unknown").lower(),
         "product_id": req.product_id,
