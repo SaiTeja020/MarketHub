@@ -272,7 +272,7 @@ async def dashboard_api(user_id: str):
     product_query = {
         "size": 200,
         "query": {
-            "term": {"user_id": user_id}
+            "term": {"user_id.keyword": user_id}
         },
         "sort": [{"scraped_at": {"order": "desc"}}]
     }
