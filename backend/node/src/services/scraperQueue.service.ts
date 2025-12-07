@@ -12,6 +12,7 @@ export const pushScrapeTask = async (queueName: string, task: any) => {
   if (!channel) await connectRabbit();
   channel!.assertQueue(queueName, { durable: true });
   channel!.sendToQueue(queueName, Buffer.from(JSON.stringify(task)), { persistent: true });
+  console.log(`ENQUEUE_SENT queue=${queueName} task_id=${task.task_id ?? task.id ?? 'unknown'} ts=${new Date().toISOString()}`);
 };
 
 export const getChannel = () => channel;
