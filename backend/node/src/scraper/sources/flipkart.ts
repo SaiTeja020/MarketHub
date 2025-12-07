@@ -106,7 +106,7 @@ export async function scrapeFlipkart(url: string): Promise<{
   const page: Page = await browser.newPage();
 
   try {
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 600 });
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
 
     // small chance Flipkart lazy-loads; give a short pause
     await page.waitForTimeout(300);
