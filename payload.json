@@ -1,0 +1,9 @@
+﻿{
+  "user_id": "aa6510f1-9697-4847-9794-da225eb1caa7",
+  "product_id": "test-product-001",
+  "title": "My Test Product",
+  "image_url": "https://m.media-amazon.com/images/I/612NWRU5ywL._SX679_.jpg",
+  "url": "https://www.amazon.in/HyperX-Clutch-Gladiate-Controller-Programmable/dp/B0BWSRLXXC/ref=pd_ci_mcx_mh_mcx_views_0_image?pd_rd_w=3O85V&content-id=amzn1.sym.04d3fdac-1b15-414f-91d2-0c9aaaf137d6%3Aamzn1.symc.30e3dbb4-8dd8-4bad-b7a1-a45bcdbc49b8&pf_rd_p=04d3fdac-1b15-414f-91d2-0c9aaaf137d6&pf_rd_r=0RR331RK7J6DVKRJ811F&pd_rd_wg=sFvfB&pd_rd_r=2514187e-ccc0-4858-8023-86d75b2a23b3&pd_rd_i=B0BWSRLXXC&th=1",
+  "source": "amazon",
+  "current_price": 123.45
+}

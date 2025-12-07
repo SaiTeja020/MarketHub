@@ -3,6 +3,8 @@ import os
 import uuid
 import json
 import logging
+import asyncio
+
 from datetime import datetime
 from urllib.parse import unquote
 from typing import Optional
@@ -13,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, HttpUrl
 
 from utils.redis_client import get_redis
+from utils.rabbit_publish import publish_scrape_job
 from services.analyze_service import request_analysis, get_analysis_result
 from services.elastic_service import (
     ensure_indices,
@@ -113,17 +116,15 @@ def debug_config():
 
 @app.post("/user/add_product")
 async def add_user_product(req: TrackProductRequest):
-    """
-    Adds a user-specific product entry into Elasticsearch.
-    """
     if not req.url:
         raise HTTPException(status_code=400, detail="Missing product url")
 
     decoded_url = unquote(req.url)
-
     es = await get_es()
 
-    doc = {
+    # 1) Index user tracking doc immediately
+    user_doc_id = f"{req.user_id}-{req.product_id}"
+    user_doc = {
         "user_id": req.user_id,
         "product_id": req.product_id,
         "title": req.title,
@@ -135,16 +136,29 @@ async def add_user_product(req: TrackProductRequest):
     }
 
     try:
-        await es.index(
-            index=PRODUCT_INDEX,
-            id=f"{req.user_id}-{req.product_id}",
-            document=doc
-        )
+        await es.index(index=PRODUCT_INDEX, id=user_doc_id, document=user_doc)
     except Exception as e:
-        logger.exception("Failed to add product to ES: %s", e)
+        logger.exception("Failed to add tracking doc %s: %s", user_doc_id, e)
         raise HTTPException(status_code=500, detail=f"Failed to add product: {e}")
 
-    return {"status": "success", "product": doc}
+    # 2) Fire-and-forget enqueue into RabbitMQ so worker will scrape
+    payload = {
+        "task_id": str(uuid.uuid4()),
+        "url": decoded_url,
+        "source": (req.source or "unknown").lower(),
+        "product_id": req.product_id,
+        "added_at": user_doc["added_at"],
+    }
+
+    try:
+        # schedule background publish without awaiting (do not block response)
+        asyncio.create_task(publish_scrape_job(payload))
+        scrape_queued = True
+    except Exception as e:
+        logger.exception("Failed to enqueue scrape job for %s: %s", req.product_id, e)
+        scrape_queued = False
+
+    return {"status": "success", "product": user_doc, "scrape_queued": scrape_queued, "task_id": payload["task_id"] if scrape_queued else None}
 
 
 # -------------------------------

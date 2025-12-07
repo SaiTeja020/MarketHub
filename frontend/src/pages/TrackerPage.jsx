@@ -193,7 +193,7 @@ export default function TrackerPage() {
         {/* Header + Add Button */}
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h1 className="text-2xl font-bold">My Tracker</h1>
+            <h1 className="text-2xl font-bold text-black-500">My Tracker</h1>
             <p className="text-sm text-gray-500">
               Monitor price changes in real-time.
             </p>
