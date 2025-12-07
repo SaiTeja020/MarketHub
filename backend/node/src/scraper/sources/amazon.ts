@@ -47,7 +47,7 @@ export async function scrapeAmazon(url: string) {
   const page = await browser.newPage();
 
   try {
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 6000 });
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 600 });
 
     // wait briefly for product title or main area
     await page.waitForTimeout(400); // small pause
