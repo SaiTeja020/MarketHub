@@ -207,10 +207,17 @@ export default function Home() {
     const info = latestByProduct[featuredProductId];
     if (!info) return [];
 
-    return info.all.slice(-30).map((r) => ({
-      date: new Date(r.scraped_at).toLocaleDateString(),
-      price: Number(r.price) || 0,
-    }));
+    return info.all.slice(-30).map((r) => {
+      const dt = r.scraped_at
+        ? (String(r.scraped_at).includes('T') ? new Date(r.scraped_at) : new Date(`${r.scraped_at}T00:00:00Z`))
+        : null;
+      return {
+        // en-GB forces DD/MM/YYYY
+        date: dt ? dt.toLocaleDateString('en-GB') : '',
+        price: Number(r.price) || 0,
+        _ts: dt ? dt.getTime() : 0, // optional: helps sorting if needed
+      };
+    });
   }, [featuredProductId, latestByProduct]);
 
   const featuredProduct = products.find(

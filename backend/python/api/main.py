@@ -263,94 +263,156 @@ async def get_scrape_result(task_id: str):
 @app.get("/dashboard")
 async def dashboard_api(user_id: str):
     """
-    Returns:
-    - Products tracked by user_id
-    - Price history for those products
+    Robust dashboard endpoint that supports multiple data shapes:
+      - user_products index storing one doc per user with `products: [{product_id, added_at}, ...]`
+      - or user_products index storing multiple docs each with `product_id`
+      - fallback to PRODUCT_INDEX docs that include `user_id` (legacy)
+    It then mgets canonical product docs from PRODUCT_INDEX and collects normalized price_history.
     """
     es = await get_es()
+    logger.info("DASHBOARD request for user_id=%s", user_id)
 
-    product_query = {
-        "size": 200,
-        "query": {
-            "term": {"user_id.keyword": user_id}
-        },
-        "sort": [{"scraped_at": {"order": "desc"}}]
-    }
+    products = []
+    product_ids = []
 
-    prod_resp = await es.search(index=PRODUCT_INDEX, body=product_query)
-    products = [hit["_source"] for hit in prod_resp["hits"]["hits"]]
+    # helper to check index existence
+    async def index_exists(idx_name: str) -> bool:
+        try:
+            return bool(await es.indices.exists(index=idx_name))
+        except Exception:
+            return False
 
-    product_ids = [p["product_id"] for p in products]
+    # 1) Prefer user_products index (if present)
+    if await index_exists("user_products"):
+        try:
+            # try to find a direct doc with user_id as id (common for single-doc-per-user)
+            try:
+                up_get = await es.get(index="user_products", id=user_id)
+                up_doc = up_get.get("_source")
+                if up_doc:
+                    logger.info("DASHBOARD: found user_products doc by id for user %s", user_id)
+                    # extract product ids from up_doc.products array if present
+                    if isinstance(up_doc.get("products"), list):
+                        product_ids = [p.get("product_id") for p in up_doc["products"] if p.get("product_id")]
+                else:
+                    product_ids = []
+            except Exception:
+                # not found by id — fallback to search by user_id field
+                user_prod_resp = await es.search(index="user_products", body={
+                    "size": 1000,
+                    "query": {"term": {"user_id.keyword": user_id}}
+                })
+                hits = user_prod_resp.get("hits", {}).get("hits", [])
+                logger.info("DASHBOARD: user_products search hits=%d", len(hits))
+                # two shapes possible: hits with _source.product_id OR _source.products array
+                ids = []
+                for h in hits:
+                    src = h.get("_source", {})
+                    if src.get("product_id"):
+                        ids.append(src.get("product_id"))
+                    elif isinstance(src.get("products"), list):
+                        ids.extend([p.get("product_id") for p in src["products"] if p.get("product_id")])
+                product_ids = ids
+        except Exception as e:
+            logger.exception("DASHBOARD: error reading user_products: %s", e)
+            product_ids = []
 
+    # 2) If still empty, fall back to PRODUCT_INDEX by user_id (legacy)
     if not product_ids:
-        return {"products": [], "price_history": []}
+        try:
+            prod_resp = await es.search(index=PRODUCT_INDEX, body={
+                "size": 200,
+                "query": {"term": {"user_id.keyword": user_id}}
+            })
+            prod_hits = prod_resp.get("hits", {}).get("hits", [])
+            logger.info("DASHBOARD: PRODUCT_INDEX hits=%d", len(prod_hits))
+            # collect product source docs (if they already store the canonical metadata)
+            products = [h.get("_source") for h in prod_hits if h.get("_source")]
+            product_ids = [p.get("product_id") for p in products if p.get("product_id")]
+        except Exception as e:
+            logger.exception("DASHBOARD: error searching PRODUCT_INDEX by user_id: %s", e)
+            products = []
+            product_ids = []
 
+    # 3) If product_ids were found via user_products but we don't yet have products, mget canonical docs
+    if product_ids and not products:
+        try:
+            dedup_ids = list(dict.fromkeys([pid for pid in product_ids if pid]))
+            if dedup_ids:
+                mget_resp = await es.mget(body={"ids": dedup_ids}, index=PRODUCT_INDEX)
+                docs = mget_resp.get("docs", [])
+                products = [d.get("_source") for d in docs if d.get("found")]
+                logger.info("DASHBOARD: mget fetched %d product docs", len(products))
+        except Exception as e:
+            logger.exception("DASHBOARD: error during mget PRODUCT_INDEX: %s", e)
+            products = []
+
+    # If still no product_ids, return empty result
+    if not product_ids:
+        logger.info("DASHBOARD: no product ids found for user %s", user_id)
+        return {"products": products, "price_history": []}
+
+    # 4) Fetch price history for discovered product_ids (normalize afterwards)
     hist_query = {
         "size": 5000,
-        "query": {
-            "terms": {"product_id": product_ids}
-        },
-        "sort": [{"scraped_at": {"order": "asc"}}]
-    }
-
-    hist_resp = await es.search(index=PRICE_HISTORY_INDEX, body=hist_query)
-    price_history = [hit["_source"] for hit in hist_resp["hits"]["hits"]]
-
-    return {
-        "products": products,
-        "price_history": price_history
-    }
-
-
-# -------------------------------
-# Analysis Endpoints
-# -------------------------------
-
-@app.post("/analyze", status_code=202)
-async def enqueue_analysis(req: AnalyzeRequest):
-    """
-    Send scraping result to Celery for Gemini analysis.
-    """
-    task_id = str(uuid.uuid4())
-
-    payload = {
-        "task_id": task_id,
-        "product_id": req.product_id,
-        "title": req.title,
-        "image_url": str(req.image_url) if req.image_url else None,
-        "current_price": req.current_price
+        "query": {"terms": {"product_id": list(set([pid for pid in product_ids if pid]))}}
     }
 
     try:
-        request_analysis(payload)
+        hist_resp = await es.search(index=PRICE_HISTORY_INDEX, body=hist_query)
+        raw_price_hits = [hit.get("_source") for hit in hist_resp.get("hits", {}).get("hits", [])]
+        logger.info("DASHBOARD: raw_price_hits=%d", len(raw_price_hits))
     except Exception as e:
-        logger.exception("Failed to queue analysis job: %s", e)
-        raise HTTPException(status_code=500, detail=f"Failed to queue analysis job: {e}")
+        logger.exception("DASHBOARD: error fetching price_history: %s", e)
+        raw_price_hits = []
 
-    return {
-        "task_id": task_id,
-        "status": "queued",
-        "message": "Analysis job sent to Celery"
-    }
+    # 5) Normalize price history rows
+    normalized = []
+    for src in raw_price_hits:
+        r = dict(src or {})
+        # price
+        price = r.get("price")
+        if price is None:
+            price = r.get("current_price") or r.get("value") or r.get("amount") or None
+
+        # scraped_at
+        scraped_at = r.get("scraped_at")
+        if not scraped_at:
+            if r.get("date"):
+                scraped_at = f"{r.get('date')}T00:00:00Z"
+            else:
+                ts = r.get("timestamp") or r.get("ts")
+                try:
+                    if isinstance(ts, (int, float)):
+                        scraped_at = datetime.utcfromtimestamp(ts / (1000.0 if ts > 1e12 else 1.0)).isoformat() + "Z"
+                    elif isinstance(ts, str) and ts.isdigit():
+                        tnum = float(ts)
+                        scraped_at = datetime.utcfromtimestamp(tnum / (1000.0 if tnum > 1e12 else 1.0)).isoformat() + "Z"
+                except Exception:
+                    scraped_at = None
+
+        normalized.append({
+            "product_id": r.get("product_id"),
+            "price": price,
+            "currency": r.get("currency") or r.get("curr") or "INR",
+            "scraped_at": scraped_at,
+            **{k: v for k, v in r.items() if k not in ("price", "current_price", "date", "ts", "timestamp", "scraped_at")}
+        })
+
+    # 6) Sort ascending by scraped_at (unknown dates go last)
+    def _key(it):
+        s = it.get("scraped_at")
+        try:
+            return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp() if s else float("inf")
+        except Exception:
+            return float("inf")
+
+    normalized.sort(key=_key)
+
+    logger.info("DASHBOARD: returning %d products and %d price_history rows", len(products), len(normalized))
+    return {"products": products, "price_history": normalized}
 
 
-@app.get("/analyze/result/{task_id}")
-async def get_analysis_result_endpoint(task_id: str):
-    """
-    Fetch LLM analysis from Redis AND index into Elasticsearch.
-    """
-    analysis = await get_analysis_result(task_id)
-
-    if analysis is None:
-        raise HTTPException(status_code=404, detail="Analysis result not ready")
-
-    try:
-        await index_analysis_result(task_id, analysis)
-    except Exception as e:
-        logger.exception("Failed to index analysis result %s: %s", task_id, e)
-        raise HTTPException(status_code=500, detail=f"Failed to index analysis: {e}")
-
-    return {"task_id": task_id, "analysis": analysis}
 
 
 # -------------------------------
@@ -534,23 +596,63 @@ def root():
 @app.get("/user/products")
 async def get_user_products(user_id: str):
     """
-    Returns product list belonging to a specific user.
+    Returns product metadata list belonging to a specific user.
+    Supports multiple shapes in user_products index:
+      - single doc with id == user_id and _source.products = [{product_id, added_at}, ...]
+      - multiple docs with _source.product_id and user_id field
+    Will mget canonical product docs from PRODUCT_INDEX if available.
     """
     es = await get_es()
-
-    query = {
-        "size": 300,
-        "query": {
-            "term": {"user_id": user_id}
-        },
-        "sort": [{"scraped_at": {"order": "desc"}}]
-    }
+    products = []
 
     try:
-        resp = await es.search(index=PRODUCT_INDEX, body=query)
-        results = [h["_source"] for h in resp["hits"]["hits"]]
-        return {"products": results}
+        # 1) Try get by id (single-doc-per-user pattern)
+        try:
+            up_get = await es.get(index="user_products", id=user_id)
+            up_src = up_get.get("_source") or {}
+            product_ids = []
+            if isinstance(up_src.get("products"), list):
+                product_ids = [p.get("product_id") for p in up_src["products"] if p.get("product_id")]
+            else:
+                # fall back to legacy single docs pattern
+                if up_src.get("product_id"):
+                    product_ids = [up_src.get("product_id")]
+        except Exception:
+            # not found by id -> search user_products by user_id field
+            product_ids = []
+            try:
+                resp = await es.search(index="user_products", body={
+                    "size": 500,
+                    "query": {"term": {"user_id.keyword": user_id}}
+                })
+                hits = resp.get("hits", {}).get("hits", [])
+                for h in hits:
+                    src = h.get("_source", {}) or {}
+                    if src.get("product_id"):
+                        product_ids.append(src.get("product_id"))
+                    elif isinstance(src.get("products"), list):
+                        product_ids.extend([p.get("product_id") for p in src["products"] if p.get("product_id")])
+            except Exception:
+                # ignore and continue to fallback below
+                product_ids = []
+
+        # 2) If we have product_ids, fetch canonical product docs from PRODUCT_INDEX
+        if product_ids:
+            dedup = list(dict.fromkeys([pid for pid in product_ids if pid]))
+            if dedup:
+                mget_resp = await es.mget(body={"ids": dedup}, index=PRODUCT_INDEX)
+                docs = mget_resp.get("docs", [])
+                products = [d.get("_source") for d in docs if d.get("found") and d.get("_source")]
+        else:
+            # 3) As a last resort, search PRODUCT_INDEX for docs with user_id (legacy)
+            resp = await es.search(index=PRODUCT_INDEX, body={
+                "size": 300,
+                "query": {"term": {"user_id.keyword": user_id}},
+                "sort": [{"scraped_at": {"order": "desc"}}]
+            })
+            products = [h.get("_source") for h in resp.get("hits", {}).get("hits", []) if h.get("_source")]
+
+        return {"products": products}
     except Exception as e:
-        # Log full exception so we can see why a call would fail
         logger.exception("Failed to fetch user products for user_id=%s: %s", user_id, e)
         raise HTTPException(status_code=500, detail=f"Failed to fetch user products: {e}")

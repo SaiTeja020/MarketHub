@@ -1,6 +1,7 @@
+// src/pages/AnalyticsPage.jsx
 import { useEffect, useState, useMemo } from "react";
 import { useParams } from "react-router-dom";
-
+import { supabase } from "../lib/supabase.js";
 import {
   ResponsiveContainer,
   AreaChart,
@@ -10,86 +11,147 @@ import {
   YAxis,
   CartesianGrid,
 } from "recharts";
-
-import api from "../lib/api.js"; // axios instance
+import api from "../lib/api.js";
 
 export default function AnalyticsPage() {
-  const { id } = useParams(); // product id from route
-
+  const { id } = useParams(); // may be undefined
+  const [resolvedId, setResolvedId] = useState(id || null);
   const [loading, setLoading] = useState(true);
   const [product, setProduct] = useState(null);
   const [priceHistory, setPriceHistory] = useState([]);
   const [retailerPrices, setRetailerPrices] = useState([]);
   const [error, setError] = useState("");
 
+  // Resolve id if not provided in route (pick first tracked product for user)
   useEffect(() => {
-    if (!id) {
-      setError("Invalid product ID");
-      setLoading(false);
-      return;
-    }
-
     let mounted = true;
-
-    async function loadAll() {
+    async function resolve() {
+      setLoading(true);
+      setError("");
       try {
-        setLoading(true);
-        setError("");
-
-        /** 
-         * Only ONE call to the backend
-         * GET /api/analytics/:id
-         * 
-         * Backend returns:
-         * {
-         *   product: {...},
-         *   price_history: [...],
-         *   retailer_prices: [...]
-         * }
-         */
-        const res = await api.get(`/analytics/${id}`);
-
-        if (!mounted) return;
-
-        setProduct(res.data.product || null);
-        setPriceHistory(res.data.price_history || []);
-        setRetailerPrices(res.data.retailer_prices || []);
-
-      } catch (err) {
-        console.error(err);
-        if (mounted) {
-          setError(err?.response?.data?.error || err.message || "Failed to load data");
+        if (id) {
+          setResolvedId(id);
+          setLoading(false);
+          return;
         }
+        const {
+          data: { user },
+          error: userErr,
+        } = await supabase.auth.getUser();
+
+        if (userErr || !user) {
+          if (!mounted) return;
+          setError("Unable to get current user. Please login.");
+          setLoading(false);
+          return;
+        }
+
+        const dashResp = await api.get("/dashboard", {
+          params: { user_id: user.id },
+        });
+
+        const prods = dashResp?.data?.products || [];
+        if (!prods || prods.length === 0) {
+          setError("You don't have any tracked products yet. Add one from My Tracker.");
+          setLoading(false);
+          return;
+        }
+
+        const pick = prods[0].product_id || prods[0].id || null;
+        if (!pick) {
+          setError("No valid product id available for your tracked products.");
+          setLoading(false);
+          return;
+        }
+
+        setResolvedId(pick);
+      } catch (err) {
+        console.error("Analytics resolve error:", err);
+        setError(err?.response?.data?.detail || err?.message || "Failed to resolve product id.");
       } finally {
         if (mounted) setLoading(false);
       }
     }
-
-    loadAll();
-
+    resolve();
     return () => {
       mounted = false;
     };
   }, [id]);
 
-  // ---- Derived Chart Data ----
+  // Load analytics when resolvedId is set
+  useEffect(() => {
+    if (!resolvedId) return;
+    let mounted = true;
+    async function loadAnalytics() {
+      setLoading(true);
+      setError("");
+      try {
+        const res = await api.get(`/analytics/${resolvedId}`);
+
+        if (!mounted) return;
+        setProduct(res.data.product || null);
+        setPriceHistory(res.data.price_history || []);
+        setRetailerPrices(res.data.retailer_prices || []);
+      } catch (err) {
+        console.error("Failed to load analytics for", resolvedId, err);
+        setError(err?.response?.data?.detail || err?.message || "Failed to load analytics.");
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    }
+    loadAnalytics();
+    return () => {
+      mounted = false;
+    };
+  }, [resolvedId]);
+
+  // Normalize chart data and numeric prices
   const chartData = useMemo(() => {
-    if (!priceHistory.length) return [];
-    return priceHistory.map((p) => ({
-      date: new Date(p.tracked_at).toLocaleDateString(),
-      price: Number(p.price) || 0,
-    }));
+    if (!priceHistory || !priceHistory.length) return [];
+    return priceHistory
+      .map((p) => {
+        const rawDate =
+          p.scraped_at ?? p.tracked_at ?? p.date ?? p.timestamp ?? p.ts ?? null;
+
+        let iso = rawDate;
+        if (typeof rawDate === "number") {
+          iso = new Date(rawDate).toISOString();
+        } else if (typeof rawDate === "string" && /^\d{10}$/.test(rawDate)) {
+          iso = new Date(Number(rawDate) * 1000).toISOString();
+        } else if (typeof rawDate === "string" && /^\d+$/.test(rawDate)) {
+          iso = new Date(Number(rawDate)).toISOString();
+        }
+
+        const price = Number(p.price ?? p.current_price ?? p.amount ?? p.value ?? 0) || 0;
+
+        return {
+          date: iso ? new Date(iso).toLocaleDateString() : "",
+          price,
+        };
+      })
+      .filter((d) => d.date) // keep only rows with valid date
+      .sort((a, b) => new Date(a.date) - new Date(b.date));
   }, [priceHistory]);
 
-  // ---- UI render safety ----
-  if (!id) {
-    return (
-      <div className="p-8 bg-gray-50 min-h-screen">
-        <div className="text-red-600">Invalid product ID.</div>
-      </div>
-    );
+  // Compute min, avg, max from the chartData (defensive)
+  const { minPrice, avgPrice, maxPrice } = useMemo(() => {
+    const prices = chartData.map((d) => Number(d.price)).filter((n) => Number.isFinite(n));
+    if (!prices.length) return { minPrice: null, avgPrice: null, maxPrice: null };
+    const sum = prices.reduce((s, v) => s + v, 0);
+    const avg = sum / prices.length;
+    const mn = Math.min(...prices);
+    const mx = Math.max(...prices);
+    return { minPrice: mn, avgPrice: avg, maxPrice: mx };
+  }, [chartData]);
+
+  function formatCurrency(v) {
+    if (v === null || v === undefined) return "—";
+    const n = Number(v);
+    if (Number.isNaN(n)) return "—";
+    return `₹${n.toLocaleString(undefined, { maximumFractionDigits: 2, minimumFractionDigits: 0 })}`;
   }
 
+  // ---- UI states ----
   if (loading) {
     return (
       <div className="p-8 bg-gray-50 min-h-screen">
@@ -121,66 +183,79 @@ export default function AnalyticsPage() {
         Analytics — {product.title}
       </h1>
 
-      {/* Chart */}
-      <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
-        <h2 className="text-lg font-semibold mb-4 text-gray-800">
-          Price Trend
-        </h2>
+      {/* Chart + metrics */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="bg-white rounded-lg shadow-sm p-6">
+          <h2 className="text-lg font-semibold mb-4 text-gray-800">Price Trend</h2>
 
-        {chartData.length === 0 ? (
-          <div className="text-gray-500 text-sm">No price history available.</div>
-        ) : (
-          <div className="w-full h-72">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={chartData}>
-                <defs>
-                  <linearGradient id="g2" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.4} />
-                    <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
+          {chartData.length === 0 ? (
+            <div className="text-gray-500 text-sm">No price history available.</div>
+          ) : (
+            <div className="w-full h-72">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={chartData}>
+                  <defs>
+                    <linearGradient id="g2" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.4} />
+                      <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
 
-                <CartesianGrid strokeDasharray="3 3" />
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="date" />
+                  <YAxis tickFormatter={(v) => `₹${v}`} />
+                  <Tooltip formatter={(v) => formatCurrency(v)} />
+                  <Area
+                    type="monotone"
+                    dataKey="price"
+                    stroke="#2563eb"
+                    fill="url(#g2)"
+                    strokeWidth={2}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          )}
 
-                <XAxis dataKey="date" />
-                <YAxis />
-                <Tooltip />
-
-                <Area
-                  type="monotone"
-                  dataKey="price"
-                  stroke="#2563eb"
-                  fill="url(#g2)"
-                  strokeWidth={2}
-                />
-              </AreaChart>
-            </ResponsiveContainer>
+          {/* Metrics row: LOW / AVG / HIGH */}
+          <div className="mt-6 grid grid-cols-3 gap-3">
+            <MetricCard label="LOW" value={formatCurrency(minPrice)} />
+            <MetricCard label="AVG" value={avgPrice != null ? formatCurrency(avgPrice.toFixed && !Number.isNaN(avgPrice) ? Number(avgPrice) : avgPrice) : "—"} />
+            <MetricCard label="HIGH" value={formatCurrency(maxPrice)} />
           </div>
-        )}
-      </div>
+        </div>
 
-      {/* Retailer comparison */}
-      <div className="bg-white rounded-lg shadow-sm p-6">
-        <h2 className="text-lg font-semibold mb-3 text-gray-800">
-          Retailer Comparison
-        </h2>
+        {/* Right column: retailer comparison */}
+        <div className="bg-white rounded-lg shadow-sm p-6">
+          <h2 className="text-lg font-semibold mb-3 text-gray-800">Retailer Comparison</h2>
 
-        {retailerPrices.length === 0 ? (
-          <div className="text-gray-500 text-sm">No retailer data available.</div>
-        ) : (
-          <ul className="space-y-2">
-            {retailerPrices.slice(0, 5).map((r) => (
-              <li
-                key={r.id}
-                className="flex justify-between border-b py-2 text-gray-700"
-              >
-                <span>{r.retailer_name}</span>
-                <span className="font-semibold">₹{r.price}</span>
-              </li>
-            ))}
-          </ul>
-        )}
+          {retailerPrices.length === 0 ? (
+            <div className="text-gray-500 text-sm">No retailer data available.</div>
+          ) : (
+            <ul className="space-y-2">
+              {retailerPrices.slice(0, 5).map((r) => (
+                <li
+                  key={r.id ?? r.retailer_name}
+                  className="flex justify-between border-b py-2 text-gray-700"
+                >
+                  <span>{r.retailer_name}</span>
+                  <span className="font-semibold">{formatCurrency(r.price)}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       </div>
+    </div>
+  );
+}
+
+/* small presentational metric card */
+function MetricCard({ label, value }) {
+  return (
+    <div className="bg-gray-50 border rounded p-3 text-center">
+      <div className="text-xs text-gray-500">{label}</div>
+      <div className="text-lg font-semibold mt-1 text-gray-900">{value}</div>
     </div>
   );
 }
