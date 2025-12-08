@@ -449,6 +449,52 @@ async def get_product_details(product_id: str):
         "analysis": analysis
     }
 
+@app.post("/analyze", status_code=202)
+async def enqueue_analysis(req: AnalyzeRequest):
+    """
+    Send scraping result to Celery for Gemini analysis.
+    """
+    task_id = str(uuid.uuid4())
+
+    payload = {
+        "task_id": task_id,
+        "product_id": req.product_id,
+        "title": req.title,
+        "image_url": str(req.image_url) if req.image_url else None,
+        "current_price": req.current_price
+    }
+
+    try:
+        request_analysis(payload)
+    except Exception as e:
+        logger.exception("Failed to queue analysis job: %s", e)
+        raise HTTPException(status_code=500, detail=f"Failed to queue analysis job: {e}")
+
+    return {
+        "task_id": task_id,
+        "status": "queued",
+        "message": "Analysis job sent to Celery"
+    }
+
+
+@app.get("/analyze/result/{task_id}")
+async def get_analysis_result_endpoint(task_id: str):
+    """
+    Fetch LLM analysis from Redis AND index into Elasticsearch.
+    """
+    analysis = await get_analysis_result(task_id)
+
+    if analysis is None:
+        raise HTTPException(status_code=404, detail="Analysis result not ready")
+
+    try:
+        await index_analysis_result(task_id, analysis)
+    except Exception as e:
+        logger.exception("Failed to index analysis result %s: %s", task_id, e)
+        raise HTTPException(status_code=500, detail=f"Failed to index analysis: {e}")
+
+    return {"task_id": task_id, "analysis": analysis}
+
 
 @app.get("/deal/{product_id}")
 async def deal_summary(product_id: str):
