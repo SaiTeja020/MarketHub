@@ -144,6 +144,16 @@ export default function ProductPage() {
     return { min, max, avg, since };
   }, [normalizedHistory]);
 
+  // choose most reliable "latest" price/date: prefer product.current_price, else last priceHistory entry
+  const latestEntry = normalizedHistory.length ? normalizedHistory[normalizedHistory.length - 1] : null;
+  const latestPrice = Number(product?.current_price ?? latestEntry?.price ?? product?.price ?? NaN);
+  const latestCheckedAt =
+    product?.scraped_at ??
+    (latestEntry?.date ? latestEntry.date.toISOString() : null) ??
+    product?.updated_at ??
+    null;
+
+
   function formatCurrency(v) {
     if (v === null || v === undefined) return "-";
     const n = Number(v);
@@ -252,19 +262,24 @@ export default function ProductPage() {
                 <div>
                   <div className="text-sm text-gray-500">Current Price</div>
                   <div className="text-3xl font-bold text-sky-700">
-                    {formatCurrency(product.current_price ?? product.price ?? null)}
+                    {Number.isFinite(latestPrice) ? formatCurrency(latestPrice) : "-"}
                   </div>
                   <div className="text-xs text-gray-400 mt-1">
-                    Last checked: {product.scraped_at ? new Date(product.scraped_at).toLocaleString() : "-"}
+                    Last checked: {latestCheckedAt ? new Date(latestCheckedAt).toLocaleString() : "-"}
                   </div>
                 </div>
 
                 <div className="space-y-2">
-                  <button onClick={handleAnalyzeClick} disabled={analyzing} className="px-4 py-2 bg-indigo-600 text-white rounded shadow">
+                  <button
+                    onClick={handleAnalyzeClick}
+                    disabled={analyzing}
+                    className="px-4 py-2 bg-indigo-600 text-white rounded shadow"
+                  >
                     {analyzing ? "Analyzing…" : "Analyze Deal"}
                   </button>
 
                   {analysisError && <div className="text-red-600 text-sm">{analysisError}</div>}
+
                   {analysisSummary && (
                     <div className="p-3 bg-gray-50 rounded border">
                       <div className="text-xs text-gray-500">Deal score</div>
@@ -275,18 +290,19 @@ export default function ProductPage() {
                 </div>
               </div>
 
+
               <div className="grid grid-cols-3 gap-4 mt-6">
                 <div className="p-3 bg-gray-50 rounded text-center">
                   <div className="text-xs text-gray-500">LOW</div>
-                  <div className="text-lg font-semibold">{formatCurrency(stats.min)}</div>
+                  <div className="text-lg font-semibold text-gray-500">{formatCurrency(stats.min)}</div>
                 </div>
                 <div className="p-3 bg-gray-50 rounded text-center">
                   <div className="text-xs text-gray-500">AVG</div>
-                  <div className="text-lg font-semibold">{stats.avg ? `₹${stats.avg.toFixed(2)}` : "-"}</div>
+                  <div className="text-lg font-semibold text-gray-500">{stats.avg ? `₹${stats.avg.toFixed(2)}` : "-"}</div>
                 </div>
                 <div className="p-3 bg-gray-50 rounded text-center">
                   <div className="text-xs text-gray-500">HIGH</div>
-                  <div className="text-lg font-semibold">{formatCurrency(stats.max)}</div>
+                  <div className="text-lg font-semibold text-gray-500">{formatCurrency(stats.max)}</div>
                 </div>
               </div>
 
