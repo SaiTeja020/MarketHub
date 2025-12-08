@@ -168,7 +168,14 @@ export default function Login() {
                                         Sign up
                                     </a>
                                 </p>
+                                <a
+                                    href="/forgot-password"
+                                    className="text-sm font-medium text-slate-800 hover:text-slate-900"
+                                >
+                                    Forgot password?
+                                </a>
                             </div>
+
                         </form>
                     </div>
                 </div>

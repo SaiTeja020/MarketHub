@@ -95,7 +95,7 @@ export default function ResetPasswordPage() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-loginpage-bg bg-cover bg-center">
       <div className="bg-white p-8 rounded-lg shadow-md w-full max-w-md">
-        <h2 className="text-2xl font-semibold mb-4">Set a new password</h2>
+        <h2 className="text-2xl font-semibold mb-4 text black">Set a new password</h2>
 
         {!isRecoverySession ? (
           <div>

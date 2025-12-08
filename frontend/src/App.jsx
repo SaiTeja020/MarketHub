@@ -13,7 +13,7 @@ import ProductPage from "./pages/ProductPage.jsx";
 import TrackerPage from "./pages/TrackerPage.jsx";
 import AnalyticsPage from "./pages/AnalyticsPage.jsx";
 import SignUpPage from "./pages/SignUpPage.jsx";
-import ForgotPasswordPage from "./pages/ForgotPasswordPage.jsx"; // ensure exact casing
+import ForgotPasswordPage from "./pages/forgotPasswordPage.jsx";
 import ResetPasswordPage from "./pages/ResetPasswordPage.jsx";
 
 function App() {
