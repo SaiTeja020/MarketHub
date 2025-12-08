@@ -283,7 +283,7 @@ export default function ProductPage() {
                   {analysisSummary && (
                     <div className="p-3 bg-gray-50 rounded border">
                       <div className="text-xs text-gray-500">Deal score</div>
-                      <div className="text-xl font-semibold">{Math.round(analysisSummary.score)} / 100</div>
+                      <div className="text-xl font-semibold text-gray-500">{Math.round(analysisSummary.score)} / 100</div>
                       <div className="text-sm text-gray-700 mt-2 whitespace-pre-wrap">{analysisSummary.summary}</div>
                     </div>
                   )}
