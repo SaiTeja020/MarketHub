@@ -517,25 +517,6 @@ async function handleAnalyzeClick() {
 
         {/* Right column: retailer comparison + analysis summary */}
         <div className="bg-white rounded-lg shadow-sm p-6 space-y-4">
-          <div>
-            <h2 className="text-lg font-semibold mb-3 text-gray-800">Retailer Comparison</h2>
-
-            {retailerPrices.length === 0 ? (
-              <div className="text-gray-500 text-sm">No retailer data available.</div>
-            ) : (
-              <ul className="space-y-2">
-                {retailerPrices.slice(0, 5).map((r) => (
-                  <li
-                    key={r.id ?? r.retailer_name}
-                    className="flex justify-between border-b py-2 text-gray-700"
-                  >
-                    <span>{r.retailer_name}</span>
-                    <span className="font-semibold">{formatCurrency(r.price)}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
 
           {/* Analysis summary panel */}
           <div>

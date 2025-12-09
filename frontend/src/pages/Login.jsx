@@ -55,7 +55,7 @@ export default function Login() {
 
                             {/* Brand name */}
                             <span className="text-6xl font-extrabold tracking-tight">
-                                MarketHub
+                                PriceLens
                             </span>
                         </div>
 

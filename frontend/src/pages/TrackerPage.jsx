@@ -274,7 +274,7 @@ export default function TrackerPage() {
         <div className="flex items-center justify-between mb-6">
           <div>
             <h1 className="text-2xl font-bold text-gray-900">My Tracker</h1>
-            <p className="text-sm text-gray-500">Monitor prices across different stores in real-time.</p>
+            <p className="text-sm text-gray-500">Monitor prices across different stores.</p>
           </div>
 
           <div className="flex items-center gap-3">

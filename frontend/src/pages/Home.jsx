@@ -10,8 +10,9 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  Area,
+  Legend,
   AreaChart,
+  Area,
 } from "recharts";
 
 export default function Home() {
@@ -201,24 +202,65 @@ export default function Home() {
     ).slice(0, 6);
   }, [products, latestByProduct]);
 
-  const featuredHistory = useMemo(() => {
-    if (!featuredProductId) return [];
+  // ----- NEW: Build multi-product chart series -----
+  const productSeries = useMemo(() => {
+    // collect product ids we want to plot (use all tracked products)
+    const productList = products.map((p) => ({
+      product_id: p.product_id,
+      title: p.title,
+    }));
 
-    const info = latestByProduct[featuredProductId];
-    if (!info) return [];
+    // helper to build date string (en-GB as before)
+    function formatDate(scraped_at) {
+      if (!scraped_at) return "";
+      const dt = String(scraped_at).includes("T")
+        ? new Date(scraped_at)
+        : new Date(`${scraped_at}T00:00:00Z`);
+      return dt.toLocaleDateString("en-GB");
+    }
 
-    return info.all.slice(-30).map((r) => {
-      const dt = r.scraped_at
-        ? (String(r.scraped_at).includes('T') ? new Date(r.scraped_at) : new Date(`${r.scraped_at}T00:00:00Z`))
-        : null;
-      return {
-        // en-GB forces DD/MM/YYYY
-        date: dt ? dt.toLocaleDateString('en-GB') : '',
-        price: Number(r.price) || 0,
-        _ts: dt ? dt.getTime() : 0, // optional: helps sorting if needed
-      };
+    // collect all dates across products into a Set
+    const dateSet = new Set();
+    productList.forEach(({ product_id }) => {
+      const arr = latestByProduct[product_id]?.all || [];
+      arr.forEach((r) => {
+        dateSet.add(formatDate(r.scraped_at));
+      });
     });
-  }, [featuredProductId, latestByProduct]);
+
+    // create sorted dates array by timestamp (so chart x-axis flows correctly)
+    const dateArray = Array.from(dateSet).filter(Boolean);
+    // To sort reliably we map to timestamps using any available scraped_at for that date.
+    // Build a map date->timestamp (pick first match)
+    const dateToTs = {};
+    priceHistory.forEach((r) => {
+      const d = formatDate(r.scraped_at);
+      if (!d) return;
+      const ts = (String(r.scraped_at).includes("T") ? new Date(r.scraped_at) : new Date(`${r.scraped_at}T00:00:00Z`)).getTime();
+      if (!dateToTs[d] || dateToTs[d] > ts) dateToTs[d] = ts;
+    });
+    dateArray.sort((a, b) => (dateToTs[a] || 0) - (dateToTs[b] || 0));
+
+    // Build a map for quick lookup of price by product_id+date
+    const priceMap = {}; // key: `${product_id}||${date}` -> price
+    priceHistory.forEach((r) => {
+      const pid = r.product_id;
+      const d = formatDate(r.scraped_at);
+      priceMap[`${pid}||${d}`] = Number(r.price) || 0;
+    });
+
+    // Build chart rows: { date: 'DD/MM/YYYY', '<pid1>': price, '<pid2>': price, ... }
+    const chartData = dateArray.map((d) => {
+      const row = { date: d };
+      productList.forEach(({ product_id }) => {
+        const key = `${product_id}||${d}`;
+        row[product_id] = priceMap.hasOwnProperty(key) ? priceMap[key] : null;
+      });
+      return row;
+    });
+
+    return { productList, chartData };
+  }, [products, latestByProduct, priceHistory]);
 
   const featuredProduct = products.find(
     (p) => p.product_id === featuredProductId
@@ -242,8 +284,6 @@ export default function Home() {
         {/* Stats Row */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
           <StatCard label="Tracked Products" value={trackedCount} color="blue" />
-          <StatCard label="Price Drops (24h)" value={priceDropsLast24h} color="green" />
-          <StatCard label="Avg. Saving" value={`${avgSavingPct}%`} color="gray" />
         </div>
 
         {/* Two-Column Layout */}
@@ -251,8 +291,13 @@ export default function Home() {
           {/* Recent Price Changes */}
           <RecentChanges recentChanges={recentChanges} placeholderImage={placeholderImage} loading={loading} error={error} />
 
-          {/* Featured Trend */}
-          <FeaturedTrend featuredProduct={featuredProduct} featuredHistory={featuredHistory} loading={loading} />
+          {/* Featured Trend - now multi-line */}
+          <FeaturedTrend
+            featuredProduct={featuredProduct}
+            featuredHistory={productSeries.chartData}
+            productList={productSeries.productList}
+            loading={loading}
+          />
         </div>
       </div>
     </div>
@@ -283,7 +328,7 @@ function RecentChanges({ recentChanges, placeholderImage, loading, error }) {
 
   return (
     <div className="bg-white rounded-lg shadow-sm p-6">
-      <h3 className="text-lg font-medium text-gray-900 mb-4">Recent Price Changes</h3>
+      <h3 className="text-lg font-medium text-gray-900 mb-4">Current Prices</h3>
 
       <div className="space-y-3">
         {recentChanges.map((item) => (
@@ -323,34 +368,81 @@ function RecentChanges({ recentChanges, placeholderImage, loading, error }) {
   );
 }
 
-function FeaturedTrend({ featuredProduct, featuredHistory, loading }) {
+function FeaturedTrend({ featuredProduct, featuredHistory, productList, loading }) {
+  // color palette (wraps if productList > palette length)
+  const palette = [
+    "#0284c7", // blue
+    "#ef4444", // red
+    "#10b981", // green
+    "#f59e0b", // amber
+    "#8b5cf6", // violet
+    "#ec4899", // pink
+    "#06b6d4", // cyan
+    "#94a3b8", // slate
+  ];
+
+  if (loading) {
+    return (
+      <div className="bg-white rounded-lg shadow-sm p-6 flex flex-col">
+        <h3 className="text-lg font-medium text-gray-900">Product Trend</h3>
+        <p className="text-sm text-gray-500">{featuredProduct?.title || "—"}</p>
+        <div className="mt-4 flex-1 min-h-[220px]">
+          <div className="h-56 bg-gray-100 rounded" />
+        </div>
+      </div>
+    );
+  }
+
+  if (!featuredHistory || featuredHistory.length === 0 || !productList || productList.length === 0) {
+    return (
+      <div className="bg-white rounded-lg shadow-sm p-6 flex flex-col">
+        <h3 className="text-lg font-medium text-gray-900">Product Trend</h3>
+        <p className="text-sm text-gray-500">{featuredProduct?.title || "—"}</p>
+        <div className="mt-4 flex-1 min-h-[220px] flex items-center justify-center text-gray-500">No history</div>
+      </div>
+    );
+  }
+
   return (
     <div className="bg-white rounded-lg shadow-sm p-6 flex flex-col">
-      <h3 className="text-lg font-medium text-gray-900">Featured Trend</h3>
-      <p className="text-sm text-gray-500">{featuredProduct?.title || "—"}</p>
+      <h3 className="text-lg font-medium text-gray-900">Products Trend</h3>
+      <p className="text-sm text-gray-500">Multi-product view</p>
 
       <div className="mt-4 flex-1 min-h-[220px]">
-        {loading ? (
-          <div className="h-56 bg-gray-100 rounded" />
-        ) : featuredHistory.length === 0 ? (
-          <div className="h-56 flex items-center justify-center text-gray-500">No history</div>
-        ) : (
-          <ResponsiveContainer width="100%" height={280}>
-            <AreaChart data={featuredHistory}>
-              <defs>
-                <linearGradient id="colorPrice" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#38bdf8" stopOpacity={0.4} />
-                  <stop offset="95%" stopColor="#38bdf8" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-              <XAxis dataKey="date" />
-              <YAxis tickFormatter={(v) => `₹${v}`} />
-              <Tooltip formatter={(v) => `₹${v.toLocaleString()}`} />
-              <Area type="monotone" dataKey="price" stroke="#0284c7" fill="url(#colorPrice)" />
-            </AreaChart>
-          </ResponsiveContainer>
-        )}
+        <ResponsiveContainer width="100%" height={280}>
+          <LineChart data={featuredHistory}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+            <XAxis dataKey="date" />
+            <YAxis tickFormatter={(v) => `₹${v}`} />
+            <Tooltip
+              formatter={(value, name) => {
+                // name is product_id; try to show title instead
+                const prod = productList.find((p) => p.product_id === name);
+                const label = prod ? prod.title : name;
+                return [`₹${(value || 0).toLocaleString()}`, label];
+              }}
+            />
+            <Legend
+              formatter={(value) => {
+                const prod = productList.find((p) => p.product_id === value);
+                return prod ? prod.title : value;
+              }}
+            />
+            {productList.map((p, idx) => (
+              <Line
+                key={p.product_id}
+                type="monotone"
+                dataKey={p.product_id}
+                name={p.product_id} // used by tooltip/legend; formatter maps to title
+                stroke={palette[idx % palette.length]}
+                strokeWidth={2}
+                dot={false}
+                connectNulls={false}
+                isAnimationActive={false}
+              />
+            ))}
+          </LineChart>
+        </ResponsiveContainer>
       </div>
     </div>
   );

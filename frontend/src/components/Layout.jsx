@@ -24,7 +24,7 @@ export default function Layout({ children }) {
             className="h-10 w-10 object-cover rounded"
           />
           <span className="text-2xl font-bold text-slate-800">
-            MarketHub
+            PriceLens
           </span>
         </div>
 

@@ -5,7 +5,7 @@ function Navbar(){
 
     return(
         <nav style = {{ padding: "10px", display : "flex", justifyContent: "space-between"}}>
-            <h3>MarketHub</h3>
+            <h3>PriceLens</h3>
             <button onClick= {logout} style = {{padding : "5px 10px"}}>Logout</button>
         </nav>
     );

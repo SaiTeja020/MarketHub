@@ -192,8 +192,10 @@ export default function ProductPage() {
             </div>
 
             <div className="flex-1">
-              <h1 className="text-2xl font-bold">{product.title}</h1>
-              <p className="text-gray-500">{safeHost(product.url)}</p>
+              <h1 className="text-2xl font-bold text-black">{product.title}</h1>
+              <p className="text-gray-500 underline cursor-pointer" onClick={() => window.open(product.url, "_blank")}>
+                {safeHost(product.url)}
+                </p>
 
               <div className="mt-4 flex items-center justify-between gap-6">
                 <div>
