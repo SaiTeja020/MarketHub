@@ -27,10 +27,66 @@ export default function AnalyticsPage() {
   // products for selector
   const [products, setProducts] = useState([]);
 
-  // analysis UI state (moved here)
+  // analysis UI state
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisSummary, setAnalysisSummary] = useState(null);
   const [analysisError, setAnalysisError] = useState(null);
+
+  // --- Normalize price history into consistent { date, price } objects ---
+  const normalizedHistory = useMemo(() => {
+    if (!Array.isArray(priceHistory)) return [];
+
+    const parseDate = (raw) => {
+      if (!raw) return null;
+      const n = Number(raw);
+      if (!Number.isNaN(n)) {
+        if (n > 1e12) return new Date(n);
+        if (n > 1e10) return new Date(n);
+        if (n > 1e9) return new Date(n * 1000);
+        return new Date(n);
+      }
+      try {
+        if (String(raw).includes("T")) return new Date(String(raw));
+        return new Date(`${String(raw)}T00:00:00Z`);
+      } catch {
+        return null;
+      }
+    };
+
+    const parsePrice = (p) => {
+      if (p == null) return null;
+      if (typeof p === "number") return p;
+      if (typeof p === "string") {
+        const cleaned = p.replace(/[^\d.-]/g, "");
+        const n = Number(cleaned);
+        return Number.isFinite(n) ? n : null;
+      }
+      return null;
+    };
+
+    return priceHistory
+      .map((r) => {
+        const price =
+          r?.price ??
+          r?.current_price ??
+          r?.value ??
+          r?.amount ??
+          r?.price_amount ??
+          null;
+
+        const dateRaw =
+          r?.scraped_at ??
+          r?.tracked_at ??
+          r?.date ??
+          r?.timestamp ??
+          null;
+
+        const date = parseDate(dateRaw);
+        return { price: parsePrice(price), date };
+      })
+      .filter((x) => x.price != null && x.date instanceof Date && !Number.isNaN(x.date.getTime()))
+      .sort((a, b) => a.date - b.date);
+  }, [priceHistory]);
 
   // Fetch user's tracked products (populate selector). Run once on mount or when route id changes
   useEffect(() => {
@@ -230,67 +286,119 @@ export default function AnalyticsPage() {
     }
   }
 
-  // ---- Analysis flow (moved here from ProductPage) ----
-  async function handleAnalyzeClick() {
-    if (!product) return;
-    setAnalyzing(true);
-    setAnalysisError(null);
-    setAnalysisSummary(null);
+  // ---- Analysis flow (direct call to deterministic endpoint) ----
+// replace your existing handleAnalyzeClick with this
+async function handleAnalyzeClick() {
+  if (!product) return;
+  setAnalyzing(true);
+  setAnalysisError(null);
+  setAnalysisSummary(null);
 
-    try {
-      const req = {
-        product_id: product.product_id ?? product.id ?? resolvedId,
-        title: product.title ?? "",
-        image_url: product.image_url ?? null,
-        current_price: Number(product.current_price ?? product.price) || null,
-      };
+  try {
+    const req = {
+      product_id: product.product_id ?? product.id ?? resolvedId,
+      title: product.title ?? "",
+      image_url: product.image_url ?? null,
+      current_price: Number(product.current_price ?? product.price),
+      history: normalizedHistory.map((h) => h.price),
+    };
 
-      const enqueue = await api.post("/analyze", req);
-      const taskId = enqueue?.data?.task_id;
-      if (!taskId) {
-        throw new Error("Failed to enqueue analysis");
-      }
+    console.log("Enqueueing analysis request:", req);
 
-      // poll for up to 20s
-      const timeout = 20000;
-      const interval = 1500;
-      let elapsed = 0;
-      let got = null;
-      while (elapsed < timeout) {
-        await new Promise((r) => setTimeout(r, interval));
-        elapsed += interval;
-        try {
-          const res = await api.get(`/analyze/result/${taskId}`);
-          if (res?.data?.analysis) {
-            got = res.data.analysis;
-            break;
-          }
-        } catch {
-          // not ready yet
-        }
-      }
+    // enqueue job (your existing queue endpoint)
+    const enqueueResp = await api.post("/analyze", req);
+    console.log("Enqueue response:", enqueueResp?.data);
 
-      if (!got) {
-        setAnalysisError("Analysis not ready — try again in a few seconds.");
+    const taskId = enqueueResp?.data?.task_id ?? enqueueResp?.data?.id ?? null;
+    const initialStatus = enqueueResp?.data?.status ?? null;
+
+    if (!taskId) {
+      // backend returned something unexpected — try to use direct analysis result if present
+      const maybeAnalysis = enqueueResp?.data?.analysis ?? enqueueResp?.data;
+      if (maybeAnalysis && (maybeAnalysis.score || maybeAnalysis.summary)) {
+        setAnalysisSummary({
+          score: Number(maybeAnalysis.score ?? 0),
+          summary: maybeAnalysis.summary ?? maybeAnalysis.text ?? JSON.stringify(maybeAnalysis).slice(0,200),
+        });
         setAnalyzing(false);
         return;
       }
-
-      if (typeof got === "object") {
-        setAnalysisSummary({
-          score: Number(got.score ?? got.score_percent ?? got.score_pct ?? 0),
-          summary: got.summary ?? got.text ?? JSON.stringify(got).slice(0, 200),
-        });
-      } else {
-        setAnalysisSummary({ score: 0, summary: String(got).slice(0, 200) });
-      }
-    } catch (err) {
-      console.error("Analyze error:", err);
-      setAnalysisError(err?.response?.data?.detail || err.message || "Failed to analyze");
-    } finally {
-      setAnalyzing(false);
+      throw new Error("Failed to enqueue analysis (no task_id returned)");
     }
+
+    // If backend already included analysis (fast path), use it
+    if (enqueueResp?.data?.analysis) {
+      const got = enqueueResp.data.analysis;
+      setAnalysisSummary({
+        score: Number(got.score ?? 0),
+        summary: got.summary ?? got.text ?? JSON.stringify(got).slice(0, 200),
+      });
+      setAnalyzing(false);
+      return;
+    }
+
+    // Poll for result
+    const timeoutMs = 20000; // 20s total
+    const intervalMs = 1500; // poll every 1.5s
+    let elapsed = 0;
+    let final = null;
+
+    while (elapsed < timeoutMs) {
+      await new Promise((r) => setTimeout(r, intervalMs));
+      elapsed += intervalMs;
+
+      try {
+        const res = await api.get(`/analyze/result/${taskId}`);
+        // debug log to console so you can inspect payload
+        console.log("Poll response:", res?.data);
+
+        if (res?.data?.analysis) {
+          final = res.data.analysis;
+          break;
+        }
+        // Some setups return { status: 'done', result: {...} }
+        if (res?.data?.status === "done" && res?.data?.result) {
+          final = res.data.result;
+          break;
+        }
+
+        // If the worker returned a textual finished message in `message` with an 'analysis' field:
+        if (res?.data?.message && typeof res.data.message === "object" && res.data.message.analysis) {
+          final = res.data.message.analysis;
+          break;
+        }
+
+        // otherwise continue polling
+      } catch (err) {
+        // silently continue — the endpoint may return 404 until job is ready
+        console.warn("Poll failed (will retry):", err?.response?.status, err?.message);
+      }
+    }
+
+    if (!final) {
+      setAnalysisError("Analysis not ready — worker may be offline or taking longer. Try again in a few seconds.");
+      setAnalyzing(false);
+      return;
+    }
+
+    // Map the final payload to expected UI shape
+    const got = final;
+    setAnalysisSummary({
+      score: Number(got.score ?? got.score_percent ?? 0),
+      summary: got.summary ?? got.text ?? JSON.stringify(got).slice(0, 200),
+    });
+  } catch (err) {
+    console.error("Analyze error:", err);
+    setAnalysisError(
+      err?.response?.data?.error ||
+        err?.response?.data?.detail ||
+        err?.message ||
+        "Failed to analyze"
+    );
+  } finally {
+    setAnalyzing(false);
   }
+}
 
   // ---- UI states ----
   if (loading) {

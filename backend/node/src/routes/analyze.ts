@@ -4,29 +4,44 @@ import { analyzePriceWithGemini } from "../services/geminiService";
 
 const router = express.Router();
 
+/**
+ * POST /analyze
+ * Body: { product_id?: string, title?: string, image_url?: string, current_price: number, history: number[] }
+ */
 router.post("/", async (req, res) => {
   try {
-    const { productName, currentPrice, history } = req.body;
+    console.log("[/analyze] request body:", JSON.stringify(req.body));
 
-    if (typeof productName !== "string" || typeof currentPrice !== "number" || !Array.isArray(history)) {
-      return res.status(400).json({ error: "Invalid payload: productName(string), currentPrice(number), history(number[])" });
+    const { product_id, title, image_url, current_price, history } = req.body ?? {};
+
+    // Basic validation
+    if (current_price == null || Number.isNaN(Number(current_price))) {
+      return res.status(400).json({ error: "current_price (number) is required" });
     }
 
-    if (history.length < 3) {
-      return res.status(400).json({ error: "Provide at least 3 historical price points" });
+    if (!Array.isArray(history) || history.length < 1) {
+      // You can enforce a minimum history length. If you prefer to allow analysis without history,
+      // change this to a warning (200) instead of 400.
+      return res.status(400).json({ error: "history (number[]) is required and should have at least 1 entry" });
     }
 
-    // Optionally: validate numeric values inside history
-    const numericHistory = history.map((h: any) => Number(h)).filter((n: number) => !Number.isNaN(n));
-    if (numericHistory.length < history.length) {
-      return res.status(400).json({ error: "History must contain only numbers" });
+    // Validate that history is numeric
+    const numericHistory = history.map((h: any) => Number(h)).filter((n: number) => Number.isFinite(n));
+    if (numericHistory.length === 0) {
+      return res.status(400).json({ error: "history must contain numeric values" });
     }
 
-    const result = await analyzePriceWithGemini(productName, currentPrice, numericHistory);
-    return res.json(result);
-  } catch (err) {
-    console.error("Analyze endpoint error:", err);
-    return res.status(500).json({ error: "Analysis failed", details: (err as Error).message });
+    // Call the analysis service (synchronous)
+    const productName = title ?? product_id ?? "Product";
+    const currentPriceNum = Number(current_price);
+
+    const analysis = await analyzePriceWithGemini(productName, currentPriceNum, numericHistory);
+
+    // Return full structured response
+    return res.json({ analysis });
+  } catch (err: any) {
+    console.error("[/analyze] error:", err);
+    return res.status(500).json({ error: "Analysis failed", details: err?.message ?? String(err) });
   }
 });
 
