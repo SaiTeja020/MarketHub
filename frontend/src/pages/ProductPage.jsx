@@ -34,11 +34,6 @@ export default function ProductPage() {
   const [retailerPrices, setRetailerPrices] = useState([]);
   const [error, setError] = useState("");
 
-  // analysis state
-  const [analyzing, setAnalyzing] = useState(false);
-  const [analysisSummary, setAnalysisSummary] = useState(null);
-  const [analysisError, setAnalysisError] = useState(null);
-
   useEffect(() => {
     let mounted = true;
 
@@ -76,16 +71,13 @@ export default function ProductPage() {
       if (!raw && raw !== 0) return null;
       const n = Number(raw);
       if (!Number.isNaN(n)) {
-        // heuristic: if > 1e12 it's ms, if > 1e10 treat as ms, else seconds
         if (n > 1e12) return new Date(n);
         if (n > 1e10) return new Date(n);
         if (n > 1e9) return new Date(n * 1000);
         return new Date(n);
       }
       try {
-        // if ISO-like string with 'T'
         if (String(raw).includes("T")) return new Date(String(raw));
-        // try YYYY-MM-DD
         return new Date(`${String(raw)}T00:00:00Z`);
       } catch {
         return null;
@@ -153,7 +145,6 @@ export default function ProductPage() {
     product?.updated_at ??
     null;
 
-
   function formatCurrency(v) {
     if (v === null || v === undefined) return "-";
     const n = Number(v);
@@ -161,68 +152,14 @@ export default function ProductPage() {
     return `₹${n.toLocaleString()}`;
   }
 
-  // --- Analyze flow (posts to /analyze then polls /analyze/result/{task_id}) ---
-  async function handleAnalyzeClick() {
-    if (!product) return;
-    setAnalyzing(true);
-    setAnalysisError(null);
-    setAnalysisSummary(null);
-
-    try {
-      const req = {
-        product_id: product.product_id ?? product.id ?? id,
-        title: product.title ?? "",
-        image_url: product.image_url ?? null,
-        current_price: Number(product.current_price ?? product.price) || null,
-      };
-
-      const enqueue = await api.post("/analyze", req);
-      const taskId = enqueue?.data?.task_id;
-      if (!taskId) {
-        throw new Error("Failed to enqueue analysis");
-      }
-
-      // poll for up to 20s
-      const timeout = 20000;
-      const interval = 1500;
-      let elapsed = 0;
-      let got = null;
-      while (elapsed < timeout) {
-        await new Promise((r) => setTimeout(r, interval));
-        elapsed += interval;
-        try {
-          const res = await api.get(`/analyze/result/${taskId}`);
-          if (res?.data?.analysis) {
-            got = res.data.analysis;
-            break;
-          }
-        } catch {
-          // not ready yet
-        }
-      }
-
-      if (!got) {
-        setAnalysisError("Analysis not ready — try again in a few seconds.");
-        setAnalyzing(false);
-        return;
-      }
-
-      // Expect backend/LLM to return an object like:
-      // { score: 0-100, summary: "two line text", details: {...} }
-      if (typeof got === "object") {
-        setAnalysisSummary({
-          score: Number(got.score ?? got.score_percent ?? got.score_pct ?? 0),
-          summary: got.summary ?? got.text ?? JSON.stringify(got).slice(0, 200),
-        });
-      } else {
-        setAnalysisSummary({ score: 0, summary: String(got).slice(0, 200) });
-      }
-    } catch (err) {
-      console.error("Analyze error:", err);
-      setAnalysisError(err?.response?.data?.detail || err.message || "Failed to analyze");
-    } finally {
-      setAnalyzing(false);
+  // Navigate to analytics page
+  function goToAnalytics() {
+    const pid = product?.product_id ?? product?.id ?? id;
+    if (!pid) {
+      navigate("/analytics"); // fallback
+      return;
     }
+    navigate(`/analytics/${pid}`);
   }
 
   if (!loading && !product) {
@@ -271,40 +208,15 @@ export default function ProductPage() {
 
                 <div className="space-y-2">
                   <button
-                    onClick={handleAnalyzeClick}
-                    disabled={analyzing}
+                    onClick={goToAnalytics}
                     className="px-4 py-2 bg-indigo-600 text-white rounded shadow"
                   >
-                    {analyzing ? "Analyzing…" : "Analyze Deal"}
+                    Analyze
                   </button>
-
-                  {analysisError && <div className="text-red-600 text-sm">{analysisError}</div>}
-
-                  {analysisSummary && (
-                    <div className="p-3 bg-gray-50 rounded border">
-                      <div className="text-xs text-gray-500">Deal score</div>
-                      <div className="text-xl font-semibold text-gray-500">{Math.round(analysisSummary.score)} / 100</div>
-                      <div className="text-sm text-gray-700 mt-2 whitespace-pre-wrap">{analysisSummary.summary}</div>
-                    </div>
-                  )}
                 </div>
               </div>
 
-
-              <div className="grid grid-cols-3 gap-4 mt-6">
-                <div className="p-3 bg-gray-50 rounded text-center">
-                  <div className="text-xs text-gray-500">LOW</div>
-                  <div className="text-lg font-semibold text-gray-500">{formatCurrency(stats.min)}</div>
-                </div>
-                <div className="p-3 bg-gray-50 rounded text-center">
-                  <div className="text-xs text-gray-500">AVG</div>
-                  <div className="text-lg font-semibold text-gray-500">{stats.avg ? `₹${stats.avg.toFixed(2)}` : "-"}</div>
-                </div>
-                <div className="p-3 bg-gray-50 rounded text-center">
-                  <div className="text-xs text-gray-500">HIGH</div>
-                  <div className="text-lg font-semibold text-gray-500">{formatCurrency(stats.max)}</div>
-                </div>
-              </div>
+              
 
               <div className="text-xs text-gray-400 mt-2">
                 Tracking since: {stats.since ? stats.since.toLocaleDateString(DATE_LOCALE, DATE_OPTS) : "-"}
