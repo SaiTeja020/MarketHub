@@ -1,17 +1,17 @@
-# Web Framework
+# Web framework
 fastapi
 uvicorn[standard]
 
 # Serialization / Validation
 pydantic
 
-# Redis (async)
+# Redis (async) - used if you want Redis as cache/result-backend
 redis>=4.2
 
-# RabbitMQ (Python-side communication)
+# RabbitMQ (async client you listed)
 aio-pika
 
-# Celery worker
+# Celery worker (uses RabbitMQ broker in your compose)
 celery
 
 # HTTP Clients
@@ -29,3 +29,9 @@ python-dotenv
 
 # PostgreSQL (Supabase)
 psycopg2-binary
+
+# Optional: helpful retry library (used only if you prefer tenacity patterns)
+tenacity
+
+# Optional: for robust JSON logging in containers
+python-json-logger

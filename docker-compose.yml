@@ -139,6 +139,56 @@ services:
     restart: unless-stopped
     shm_size: 1g
 
+    # --- Gemini async worker (Celery) --------------------------
+  celery_worker:
+    build:
+      context: ./backend/python
+      dockerfile: Dockerfile
+    container_name: celery_worker
+    command: >
+      celery -A project.celery_app worker
+      --loglevel=info
+      --concurrency=2
+      -Q gemini,default
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      fastapi:
+        condition: service_healthy
+    environment:
+      - CELERY_BROKER_URL=amqp://admin:admin@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=rpc://                      # celery default RPC backend for RabbitMQ (or use redis://redis:6379/1)
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_ENDPOINT=${GEMINI_ENDPOINT:-https://gemini.example/api}
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    volumes:
+      - ./backend/python:/app
+
+  # Optional: periodic scheduler for scheduled Gemini calls
+  celery_beat:
+    build:
+      context: ./backend/python
+      dockerfile: Dockerfile
+    container_name: celery_beat
+    command: celery -A project.celery_app beat --loglevel=info
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - BROKER_URL=amqp://admin:admin@rabbitmq:5672//
+      - RESULT_BACKEND=rpc://
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    volumes:
+      - ./backend/python:/app
+
 
 volumes:
   redis_data:

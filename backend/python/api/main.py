@@ -16,7 +16,8 @@ from pydantic import BaseModel, HttpUrl
 
 from utils.redis_client import get_redis
 from utils.rabbit_publish import publish_scrape_job
-from services.analyze_service import request_analysis, get_analysis_result
+from services.analyze_service import  get_analysis_result
+from utils.celery_app import celery_app
 from services.elastic_service import (
     ensure_indices,
     close_es,
@@ -448,11 +449,13 @@ async def get_product_details(product_id: str):
         "scraped_data": product,
         "analysis": analysis
     }
-
+    
 @app.post("/analyze", status_code=202)
 async def enqueue_analysis(req: AnalyzeRequest):
     """
     Send scraping result to Celery for Gemini analysis.
+    Uses celery_app.send_task so the API doesn't need the exact task module import path.
+    The Celery task must be registered with the name 'gemini.call_gemini' (or update the name below).
     """
     task_id = str(uuid.uuid4())
 
@@ -465,9 +468,20 @@ async def enqueue_analysis(req: AnalyzeRequest):
     }
 
     try:
-        request_analysis(payload)
+        # send_task arguments:
+        # - name: the registered Celery task name (worker must register this)
+        # - args: positional arguments (we pass the payload)
+        # - kwargs: optional keyword args
+        # - queue: ensure it hits the gemini queue
+        celery_app.send_task(
+            name="gemini.call_gemini",
+            args=[payload],
+            queue="gemini",
+            kwargs={},
+            # optional: set routing_key or priority here if you use them
+        )
     except Exception as e:
-        logger.exception("Failed to queue analysis job: %s", e)
+        logger.exception("Failed to queue analysis job via Celery: %s", e)
         raise HTTPException(status_code=500, detail=f"Failed to queue analysis job: {e}")
 
     return {
@@ -475,6 +489,7 @@ async def enqueue_analysis(req: AnalyzeRequest):
         "status": "queued",
         "message": "Analysis job sent to Celery"
     }
+
 
 
 @app.get("/analyze/result/{task_id}")
