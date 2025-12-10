@@ -1,6 +1,6 @@
 // src/pages/AnalyticsPage.jsx
 import { useEffect, useState, useMemo } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import { supabase } from "../lib/supabase.js";
 import {
   ResponsiveContainer,
@@ -15,7 +15,6 @@ import api from "../lib/api.js";
 
 export default function AnalyticsPage() {
   const { id } = useParams(); // may be undefined
-  const navigate = useNavigate();
 
   const [resolvedId, setResolvedId] = useState(id || null);
   const [loading, setLoading] = useState(true);
@@ -40,6 +39,7 @@ export default function AnalyticsPage() {
       if (!raw) return null;
       const n = Number(raw);
       if (!Number.isNaN(n)) {
+        // heuristics: seconds vs ms
         if (n > 1e12) return new Date(n);
         if (n > 1e10) return new Date(n);
         if (n > 1e9) return new Date(n * 1000);
@@ -92,7 +92,6 @@ export default function AnalyticsPage() {
   useEffect(() => {
     let mounted = true;
     async function fetchProducts() {
-      setError("");
       try {
         const {
           data: { user },
@@ -101,7 +100,6 @@ export default function AnalyticsPage() {
 
         if (userErr || !user) {
           if (!mounted) return;
-          // Not fatal — no products to show
           setProducts([]);
           return;
         }
@@ -286,119 +284,175 @@ export default function AnalyticsPage() {
     }
   }
 
+  // small helper to normalize an analysis object into { score, summary } safe for UI
+  function normalizeAnalysisForUI(raw) {
+    if (!raw) return { score: 0, summary: "No analysis result." };
+
+    // If raw is a JSON string, try parse
+    if (typeof raw === "string") {
+      // guard: sometimes the backend stored an httpx.HTTPError string — treat as error
+      if (raw.toLowerCase().includes("client error") || raw.toLowerCase().includes("http")) {
+        return { score: 0, summary: raw };
+      }
+      try {
+        raw = JSON.parse(raw);
+      } catch {
+        // leave as plain string
+        return { score: 0, summary: String(raw) };
+      }
+    }
+
+    // if it's an object, try to find score and summary/text
+    if (typeof raw === "object") {
+      const scoreCandidates = [
+        raw.score,
+        raw.score_percent,
+        raw.credibility_score,
+        raw.confidence,
+        raw.confidence_score,
+      ];
+      let score = null;
+      for (const s of scoreCandidates) {
+        if (s == null) continue;
+        const n = Number(String(s).replace("%", "").trim());
+        if (!Number.isNaN(n)) {
+          score = n;
+          break;
+        }
+      }
+      if (score == null) score = 0;
+      // if score in 0..1, scale to 0..100
+      if (score > 0 && score <= 1) score = score * 100;
+
+      const summary =
+        raw.summary ??
+        raw.text ??
+        raw.excerpt ??
+        (typeof raw.raw_response === "string" ? raw.raw_response : JSON.stringify(raw.raw_response ?? raw).slice(0, 1000));
+
+      return { score: Number(score || 0), summary: String(summary ?? "").trim() || "No summary." };
+    }
+
+    // fallback
+    return { score: 0, summary: String(raw) };
+  }
+
   // ---- Analysis flow (direct call to deterministic endpoint) ----
-// replace your existing handleAnalyzeClick with this
-async function handleAnalyzeClick() {
-  if (!product) return;
-  setAnalyzing(true);
-  setAnalysisError(null);
-  setAnalysisSummary(null);
+  async function handleAnalyzeClick() {
+    if (!product) return;
+    setAnalyzing(true);
+    setAnalysisError(null);
+    setAnalysisSummary(null);
 
-  try {
-    const req = {
-      product_id: product.product_id ?? product.id ?? resolvedId,
-      title: product.title ?? "",
-      image_url: product.image_url ?? null,
-      current_price: Number(product.current_price ?? product.price),
-      history: normalizedHistory.map((h) => h.price),
-    };
+    try {
+      const req = {
+        product_id: product.product_id ?? product.id ?? resolvedId,
+        title: product.title ?? "",
+        image_url: product.image_url ?? null,
+        current_price: Number(product.current_price ?? product.price),
+        history: normalizedHistory.map((h) => h.price),
+      };
 
-    console.log("Enqueueing analysis request:", req);
+      console.log("Enqueueing analysis request:", req);
 
-    // enqueue job (your existing queue endpoint)
-    const enqueueResp = await api.post("/analyze", req);
-    console.log("Enqueue response:", enqueueResp?.data);
+      // enqueue job (your existing queue endpoint)
+      const enqueueResp = await api.post("/analyze", req);
+      console.log("Enqueue response:", enqueueResp?.data);
 
-    const taskId = enqueueResp?.data?.task_id ?? enqueueResp?.data?.id ?? null;
-    const initialStatus = enqueueResp?.data?.status ?? null;
+      const taskId = enqueueResp?.data?.task_id ?? enqueueResp?.data?.id ?? null;
+      const initialStatus = enqueueResp?.data?.status ?? null;
 
-    if (!taskId) {
-      // backend returned something unexpected — try to use direct analysis result if present
-      const maybeAnalysis = enqueueResp?.data?.analysis ?? enqueueResp?.data;
-      if (maybeAnalysis && (maybeAnalysis.score || maybeAnalysis.summary)) {
-        setAnalysisSummary({
-          score: Number(maybeAnalysis.score ?? 0),
-          summary: maybeAnalysis.summary ?? maybeAnalysis.text ?? JSON.stringify(maybeAnalysis).slice(0,200),
-        });
+      // Fast path: backend returned analysis in same response (sync)
+      if (enqueueResp?.data?.analysis) {
+        const got = enqueueResp.data.analysis;
+        const ui = normalizeAnalysisForUI(got);
+        setAnalysisSummary(ui);
         setAnalyzing(false);
         return;
       }
-      throw new Error("Failed to enqueue analysis (no task_id returned)");
-    }
 
-    // If backend already included analysis (fast path), use it
-    if (enqueueResp?.data?.analysis) {
-      const got = enqueueResp.data.analysis;
-      setAnalysisSummary({
-        score: Number(got.score ?? 0),
-        summary: got.summary ?? got.text ?? JSON.stringify(got).slice(0, 200),
-      });
-      setAnalyzing(false);
-      return;
-    }
-
-    // Poll for result
-    const timeoutMs = 20000; // 20s total
-    const intervalMs = 1500; // poll every 1.5s
-    let elapsed = 0;
-    let final = null;
-
-    while (elapsed < timeoutMs) {
-      await new Promise((r) => setTimeout(r, intervalMs));
-      elapsed += intervalMs;
-
-      try {
-        const res = await api.get(`/analyze/result/${taskId}`);
-        // debug log to console so you can inspect payload
-        console.log("Poll response:", res?.data);
-
-        if (res?.data?.analysis) {
-          final = res.data.analysis;
-          break;
-        }
-        // Some setups return { status: 'done', result: {...} }
-        if (res?.data?.status === "done" && res?.data?.result) {
-          final = res.data.result;
-          break;
-        }
-
-        // If the worker returned a textual finished message in `message` with an 'analysis' field:
-        if (res?.data?.message && typeof res.data.message === "object" && res.data.message.analysis) {
-          final = res.data.message.analysis;
-          break;
-        }
-
-        // otherwise continue polling
-      } catch (err) {
-        // silently continue — the endpoint may return 404 until job is ready
-        console.warn("Poll failed (will retry):", err?.response?.status, err?.message);
+      // Another fast path: backend returns analysis-like object directly
+      if (enqueueResp?.data && (enqueueResp.data.score || enqueueResp.data.summary || enqueueResp.data.text)) {
+        const ui = normalizeAnalysisForUI(enqueueResp.data);
+        setAnalysisSummary(ui);
+        setAnalyzing(false);
+        return;
       }
-    }
 
-    if (!final) {
-      setAnalysisError("Analysis not ready — worker may be offline or taking longer. Try again in a few seconds.");
+      if (!taskId) {
+        throw new Error("Failed to enqueue analysis (no task_id returned)");
+      }
+
+      // Poll for result (short timeout for UX)
+      const timeoutMs = 20000; // total poll window
+      const intervalMs = 1500;
+      let elapsed = 0;
+      let final = null;
+
+      while (elapsed < timeoutMs) {
+        await new Promise((r) => setTimeout(r, intervalMs));
+        elapsed += intervalMs;
+
+        try {
+          const res = await api.get(`/analyze/result/${taskId}`);
+          console.log("Poll response:", res?.data);
+
+          // possible shapes:
+          // { analysis: {...} }
+          if (res?.data?.analysis) {
+            final = res.data.analysis;
+            break;
+          }
+          // { status:'done', result: {...} }
+          if (res?.data?.status === "done" && res?.data?.result) {
+            final = res.data.result;
+            break;
+          }
+          // { task_id, analysis: {...} } or { task_id, analysis: "..." }
+          if (res?.data && (res.data.result || res.data.analysis)) {
+            final = res.data.result ?? res.data.analysis;
+            break;
+          }
+
+          // if the endpoint returned a plain object with summary/score
+          if (res?.data && (res.data.score || res.data.summary || res.data.text)) {
+            final = res.data;
+            break;
+          }
+
+        } catch (err) {
+          // often 404 while job not ready; keep retrying silently
+          console.warn("Poll failed (will retry):", err?.response?.status, err?.message);
+        }
+      }
+
+      if (!final) {
+        setAnalysisError("Analysis not ready — worker may be offline or taking longer. Try again in a few seconds.");
+        setAnalyzing(false);
+        return;
+      }
+
+      const ui = normalizeAnalysisForUI(final);
+      // If the summary seems to contain raw HTTP error info (from backend), show friendly error
+      if (ui.summary && /client error|http.*404|not found/i.test(ui.summary)) {
+        setAnalysisError(ui.summary);
+        setAnalyzing(false);
+        return;
+      }
+
+      setAnalysisSummary(ui);
+    } catch (err) {
+      console.error("Analyze error:", err);
+      setAnalysisError(
+        err?.response?.data?.error ||
+          err?.response?.data?.detail ||
+          err?.message ||
+          "Failed to analyze"
+      );
+    } finally {
       setAnalyzing(false);
-      return;
     }
-
-    // Map the final payload to expected UI shape
-    const got = final;
-    setAnalysisSummary({
-      score: Number(got.score ?? got.score_percent ?? 0),
-      summary: got.summary ?? got.text ?? JSON.stringify(got).slice(0, 200),
-    });
-  } catch (err) {
-    console.error("Analyze error:", err);
-    setAnalysisError(
-      err?.response?.data?.error ||
-        err?.response?.data?.detail ||
-        err?.message ||
-        "Failed to analyze"
-    );
-  } finally {
-    setAnalyzing(false);
   }
-}
 
   // ---- UI states ----
   if (loading) {
@@ -517,7 +571,6 @@ async function handleAnalyzeClick() {
 
         {/* Right column: retailer comparison + analysis summary */}
         <div className="bg-white rounded-lg shadow-sm p-6 space-y-4">
-
           {/* Analysis summary panel */}
           <div>
             <h3 className="text-sm text-gray-600 mb-2">Price Analysis</h3>

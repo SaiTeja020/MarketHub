@@ -1,3 +1,5 @@
+version: "3.8"
+
 services:
   redis:
     image: redis:7-alpine
@@ -91,6 +93,18 @@ services:
         condition: service_healthy
       node_api:
         condition: service_healthy
+    # Use a python-based healthcheck to avoid curl/wget portability issues
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - >
+          python -c 'import sys,urllib.request
+          resp=urllib.request.urlopen("http://127.0.0.1:8000/")
+          sys.exit(0 if resp.getcode()==200 else 1)'
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     environment:
       - REDIS_URL=redis://redis:6379/0
       - RABBIT_URL=amqp://admin:admin@rabbitmq:5672//
@@ -98,6 +112,7 @@ services:
       - NODE_SCRAPER_URL=http://scraper:4000
       - DATABASE_URL=postgresql://postgres.sfdzwhjgegdtlndsepxs:MarketHubPS853@aws-1-ap-northeast-1.pooler.supabase.com:6543/postgres?sslmode=require
     restart: always
+
   scraper:
     build:
       context: ./backend/node
@@ -109,12 +124,10 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - RABBIT_URL=amqp://admin:admin@rabbitmq:5672//
     volumes:
-      # optional: persist playwright browsers across container restarts
       - scraper-playwright-browsers:/ms-playwright
     depends_on:
       - rabbitmq
       - redis
-    # if you want logs on stdout:
     logging:
       driver: "json-file"
       options:
@@ -129,7 +142,7 @@ services:
     command: ["node", "dist/scraper/consumer.js"]
     environment:
       - NODE_ENV=production
-      - RABBIT_URL=amqp://admin:admin@rabbitmq:5672//   # adapt if creds differ
+      - RABBIT_URL=amqp://admin:admin@rabbitmq:5672//
       - REDIS_URL=redis://redis:6379/0
     depends_on:
       rabbitmq:
@@ -139,14 +152,14 @@ services:
     restart: unless-stopped
     shm_size: 1g
 
-    # --- Gemini async worker (Celery) --------------------------
+  # --- Gemini async worker (Celery) --------------------------
   celery_worker:
     build:
       context: ./backend/python
       dockerfile: Dockerfile
     container_name: celery_worker
     command: >
-      celery -A project.celery_app worker
+      celery -A utils.celery_app worker
       --loglevel=info
       --concurrency=2
       -Q gemini,default
@@ -157,38 +170,35 @@ services:
         condition: service_healthy
       elasticsearch:
         condition: service_healthy
-      fastapi:
-        condition: service_healthy
     environment:
       - CELERY_BROKER_URL=amqp://admin:admin@rabbitmq:5672//
-      - CELERY_RESULT_BACKEND=rpc://                      # celery default RPC backend for RabbitMQ (or use redis://redis:6379/1)
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - GEMINI_ENDPOINT=${GEMINI_ENDPOINT:-https://gemini.example/api}
+      - CELERY_RESULT_BACKEND=rpc://
+      - REDIS_URL=redis://redis:6379/0
+      - GEMINI_API_KEY=AIzaSyAHdOkX9a08v0DYJx2vyGpf_jS25zE_pdw
+      - GEMINI_ENDPOINT=https://generativelanguage.googleapis.com
       - PYTHONUNBUFFERED=1
     restart: unless-stopped
     volumes:
       - ./backend/python:/app
 
-  # Optional: periodic scheduler for scheduled Gemini calls
   celery_beat:
     build:
       context: ./backend/python
       dockerfile: Dockerfile
     container_name: celery_beat
-    command: celery -A project.celery_app beat --loglevel=info
+    command: celery -A utils.celery_app beat --loglevel=info
     depends_on:
       rabbitmq:
         condition: service_healthy
       redis:
         condition: service_healthy
     environment:
-      - BROKER_URL=amqp://admin:admin@rabbitmq:5672//
-      - RESULT_BACKEND=rpc://
+      - CELERY_BROKER_URL=amqp://admin:admin@rabbitmq:5672//
+      - CELERY_RESULT_BACKEND=rpc://
       - PYTHONUNBUFFERED=1
     restart: unless-stopped
     volumes:
       - ./backend/python:/app
-
 
 volumes:
   redis_data:

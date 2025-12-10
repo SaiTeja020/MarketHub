@@ -1,4 +1,4 @@
-# api/main.py
+# backend/python/api/main.py
 import os
 import uuid
 import json
@@ -7,7 +7,7 @@ import asyncio
 
 from datetime import datetime
 from urllib.parse import unquote
-from typing import Optional
+from typing import Optional, Dict, Any
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -16,7 +16,7 @@ from pydantic import BaseModel, HttpUrl
 
 from utils.redis_client import get_redis
 from utils.rabbit_publish import publish_scrape_job
-from services.analyze_service import  get_analysis_result
+from services.analyze_service import get_analysis_result
 from utils.celery_app import celery_app
 from services.elastic_service import (
     ensure_indices,
@@ -82,6 +82,368 @@ class TrackProductRequest(BaseModel):
     url: Optional[str] = None
     source: Optional[str] = None
     current_price: Optional[float] = None
+
+
+# -------------------------------
+# Normalization helpers
+# -------------------------------
+# Add this near the top of backend/python/project/tasks/gemini.py (after imports)
+
+import redis  # you already import this elsewhere; keep only one import
+
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+
+def persist_analysis_to_redis(task_id: str, analysis_obj: dict) -> None:
+    """
+    Synchronous persist helper for Celery worker.
+
+    Writes two keys:
+      - HSET scrape:analysis:<task_id> result "<json>"
+      - SET  analysis:result:<task_id> "<json>"
+    so both legacy and new readers can find it.
+    """
+    try:
+        r = redis.Redis.from_url(REDIS_URL, decode_responses=True)
+    except Exception:
+        # if Redis isn't available this will raise; caller can decide to log/retry
+        raise
+
+    payload = json.dumps(analysis_obj, default=str, ensure_ascii=False)
+
+    try:
+        # legacy hash-style
+        r.hset(f"scrape:analysis:{task_id}", "result", payload)
+    except Exception:
+        # best-effort: log but keep trying to set the simple key
+        try:
+            # optional: r.hset may not exist on some clients; ignore errors
+            pass
+        except Exception:
+            pass
+
+    try:
+        r.set(f"analysis:result:{task_id}", payload)
+    except Exception:
+        # last-resort: log and re-raise if you want to fail
+        pass
+
+def normalize_analysis_for_api(analysis: Any) -> Dict[str, Any]:
+    """
+    Return a plain dict with keys:
+      - score (0..100 float)
+      - summary (string)
+      - raw_response (JSON-serializable or string)
+    This function is defensive against:
+      - strings stored in Redis
+      - httpx.Response-like objects
+      - numeric score in 0..1 or 0..100
+    """
+    if analysis is None:
+        return None
+
+    # If it's a JSON string stored in redis, parse it
+    if isinstance(analysis, str):
+        try:
+            analysis = json.loads(analysis)
+        except Exception:
+            analysis = {"raw": analysis}
+
+    if not isinstance(analysis, dict):
+        # fall back
+        try:
+            return {"summary": str(analysis), "score": 0.0, "raw_response": str(analysis)}
+        except Exception:
+            return {"summary": "Invalid analysis format", "score": 0.0}
+
+    # Make a shallow copy to avoid mutating original
+    out = dict(analysis)
+
+    # Normalize raw_response if it's an httpx.Response-like or non-serializable
+    raw = out.get("raw_response") or out.get("response") or None
+    if raw is not None and not isinstance(raw, (dict, list, str, int, float, bool, type(None))):
+        try:
+            if hasattr(raw, "json") and callable(raw.json):
+                try:
+                    out["raw_response"] = raw.json()
+                except Exception:
+                    out["raw_response"] = raw.text if hasattr(raw, "text") else str(raw)
+            elif hasattr(raw, "text"):
+                out["raw_response"] = raw.text
+            else:
+                out["raw_response"] = str(raw)
+        except Exception:
+            out["raw_response"] = str(raw)
+
+    # Score extraction
+    score = None
+    for k in ("score", "score_percent", "credibility_score", "confidence", "credibility"):
+        v = out.get(k)
+        if v is None:
+            continue
+        try:
+            score = float(v)
+            break
+        except Exception:
+            try:
+                # maybe "50%" or "0.5"
+                score = float(str(v).strip().rstrip("%"))
+                break
+            except Exception:
+                continue
+
+    if score is None:
+        score = 0.0
+
+    # normalize 0..1 -> 0..100
+    if 0.0 <= score <= 1.0:
+        score = score * 100.0
+
+    out["score"] = float(score)
+
+    # Summary extraction
+    summary = out.get("summary") or out.get("text") or None
+    if not summary:
+        # try nested shapes
+        raw_resp = out.get("raw_response")
+        if isinstance(raw_resp, dict):
+            for k in ("summary", "text", "output", "message", "content"):
+                if k in raw_resp and raw_resp[k]:
+                    summary = raw_resp[k]
+                    break
+            # choices
+            if not summary:
+                if "choices" in raw_resp and isinstance(raw_resp["choices"], list) and raw_resp["choices"]:
+                    c0 = raw_resp["choices"][0]
+                    summary = c0.get("text") or c0.get("message") or c0.get("content")
+        elif isinstance(raw_resp, list):
+            try:
+                summary = json.dumps(raw_resp)[:1000]
+            except Exception:
+                summary = str(raw_resp)[:1000]
+        else:
+            summary = str(raw_resp or "")[:1000]
+
+    out["summary"] = str(summary)
+
+    # Ensure JSON-serializable: convert problematic fields to str
+    for k in list(out.keys()):
+        try:
+            json.dumps(out[k])
+        except Exception:
+            out[k] = str(out[k])
+
+    return out
+
+
+def normalize_analysis_obj(analysis: Any) -> Dict[str, Any]:
+    """
+    A second conservative normalizer that attempts to unwrap common wrappers,
+    ensures raw_response is JSON-safe and that score is normalized to 0..100.
+    """
+    if analysis is None:
+        return {}
+
+    # If an object with __dict__ was returned (e.g., AsyncResult wrapper), try extracting
+    if hasattr(analysis, "__dict__") and not isinstance(analysis, dict):
+        try:
+            analysis = dict(getattr(analysis, "__dict__", {}) or {})
+        except Exception:
+            analysis = {"raw": str(analysis)}
+
+    if not isinstance(analysis, dict):
+        try:
+            return json.loads(json.dumps(analysis))
+        except Exception:
+            return {"raw": str(analysis)}
+
+    out = dict(analysis)
+
+    # Normalize raw_response
+    raw = out.get("raw_response") or out.get("response") or None
+    if raw is not None:
+        try:
+            if hasattr(raw, "json") and callable(raw.json):
+                try:
+                    out["raw_response"] = raw.json()
+                except Exception:
+                    out["raw_response"] = raw.text if hasattr(raw, "text") else str(raw)
+            elif hasattr(raw, "text"):
+                out["raw_response"] = raw.text
+            else:
+                json.dumps(raw)
+                out["raw_response"] = raw
+        except Exception:
+            out["raw_response"] = str(raw)
+
+    # Score normalization
+    score_candidates = (
+        out.get("score"),
+        out.get("score_percent"),
+        out.get("credibility_score"),
+        out.get("confidence"),
+        out.get("credibility"),
+    )
+
+    chosen = None
+    for c in score_candidates:
+        if c is None:
+            continue
+        try:
+            chosen = float(c)
+            break
+        except Exception:
+            try:
+                chosen = float(str(c).strip().rstrip("%"))
+                break
+            except Exception:
+                continue
+
+    if chosen is None:
+        out["score"] = 0.0
+    else:
+        if 0.0 <= chosen <= 1.0:
+            out["score"] = float(chosen) * 100.0
+        else:
+            out["score"] = float(chosen)
+
+    # Convert any non-serializable fields to str
+    for k, v in list(out.items()):
+        try:
+            json.dumps(v)
+        except Exception:
+            out[k] = str(v)
+
+    return out
+
+
+# -------------------------------
+# Synchronous Gemini call & persist
+# -------------------------------
+
+# Replace your existing call_gemini_sync_and_persist with this updated version
+
+async def call_gemini_sync_and_persist(payload: Dict[str, Any], timeout: int = 30) -> Dict[str, Any]:
+    """
+    Try calling GEMINI synchronously from the API. If successful persist
+    the analysis into Redis (both HSET and simple SET shapes) and return
+    the analysis object. On HTTP errors produce a friendly analysis_obj
+    (with 'error' and 'message') and persist it so frontend sees a reason.
+    """
+    task_id = payload.get("task_id") or payload.get("id")
+    if not task_id:
+        raise ValueError("payload must include a 'task_id'")
+
+    GEMINI_ENDPOINT = os.getenv("GEMINI_ENDPOINT", "https://generativelanguage.googleapis.com")
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", None)
+    if not GEMINI_API_KEY:
+        raise RuntimeError("GEMINI_API_KEY not set in environment")
+
+    headers = {"Content-Type": "application/json"}
+    # Build two candidate base paths we will try
+    model = os.getenv("GGL_MODEL", "models/text-bison-001")
+
+    def build_url(base_version: str):
+        # example: https://generativelanguage.googleapis.com/v1/models/text-bison-001:generate?key=XXX
+        return f"{GEMINI_ENDPOINT.rstrip('/')}/{base_version}/models/{model}:generate?key={GEMINI_API_KEY}"
+
+    tried_urls = []
+    resp_json = None
+    last_exc = None
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        # try primary v1 then fallback to v1beta2
+        for version in ("v1", "v1beta2"):
+            gemini_url = build_url(version)
+            tried_urls.append(gemini_url)
+            try:
+                request_body = {
+                    "prompt": {"text": f"Analyze product {payload.get('title')!r} and produce a short summary and a numeric credibility score (0..1)."},
+                    "temperature": 0.2,
+                    "maxOutputTokens": 512,
+                }
+                resp = await client.post(gemini_url, json=request_body, headers=headers)
+                resp.raise_for_status()
+                try:
+                    resp_json = resp.json()
+                except Exception:
+                    resp_json = {"text": (await resp.aread()).decode("utf-8", errors="replace")}
+                break
+            except httpx.HTTPStatusError as exc:
+                last_exc = exc
+                # If 404 try next version; otherwise break and handle below
+                status = exc.response.status_code
+                if status == 404:
+                    # try next fallback
+                    continue
+                else:
+                    # other HTTP errors -> stop trying
+                    break
+            except Exception as exc:
+                last_exc = exc
+                break
+
+    # Build a consistent analysis object (success or friendly error)
+    if resp_json is not None:
+        analysis_obj = {
+            "task_id": task_id,
+            "product_id": payload.get("product_id"),
+            "raw_response": resp_json,
+            "completed_at": datetime.utcnow().isoformat() + "Z",
+            "credibility_score": 0.5,
+        }
+        # optional: try to extract confidence if provider puts it in response
+        try:
+            if isinstance(resp_json, dict):
+                conf = resp_json.get("confidence") or resp_json.get("meta", {}).get("confidence")
+                if isinstance(conf, (int, float)):
+                    analysis_obj["credibility_score"] = float(conf)
+        except Exception:
+            pass
+    else:
+        # Build a friendly error analysis object so the frontend shows a message
+        err_msg = "Unknown error calling generative model"
+        status_code = None
+        raw_text = ""
+        if isinstance(last_exc, httpx.HTTPStatusError):
+            status_code = last_exc.response.status_code
+            try:
+                raw_text = last_exc.response.text
+            except Exception:
+                raw_text = str(last_exc)
+            err_msg = f"Provider HTTP {status_code}"
+        elif last_exc is not None:
+            raw_text = str(last_exc)
+            err_msg = "Provider call failed: " + str(last_exc)
+
+        # Keep the original attempted URLs in a safe, non-key form for debugging
+        safe_urls = []
+        for u in tried_urls:
+            # mask key param if present
+            safe_urls.append(u.split("?key=")[0] if "?key=" in u else u)
+
+        analysis_obj = {
+            "task_id": task_id,
+            "product_id": payload.get("product_id"),
+            "raw_response": {
+                "error": err_msg,
+                "status_code": status_code,
+                "detail": raw_text,
+                "attempted_endpoints": safe_urls,
+            },
+            "completed_at": datetime.utcnow().isoformat() + "Z",
+            "credibility_score": 0.0,
+            "error": True,
+            "error_message": err_msg + (f": {raw_text}" if raw_text else ""),
+        }
+
+    # Persist into Redis (best effort) — reuse your persist helper or inline
+    try:
+        # use your existing helper persist_analysis_to_redis if available
+        persist_analysis_to_redis(task_id, analysis_obj)
+    except Exception:
+        logger.exception("Persist to Redis failed for analysis %s", task_id)
+
+    return analysis_obj
 
 
 # -------------------------------
@@ -263,52 +625,39 @@ async def get_scrape_result(task_id: str):
 
 @app.get("/dashboard")
 async def dashboard_api(user_id: str):
-    """
-    Robust dashboard endpoint that supports multiple data shapes:
-      - user_products index storing one doc per user with `products: [{product_id, added_at}, ...]`
-      - or user_products index storing multiple docs each with `product_id`
-      - fallback to PRODUCT_INDEX docs that include `user_id` (legacy)
-    It then mgets canonical product docs from PRODUCT_INDEX and collects normalized price_history.
-    """
     es = await get_es()
     logger.info("DASHBOARD request for user_id=%s", user_id)
 
     products = []
     product_ids = []
 
-    # helper to check index existence
     async def index_exists(idx_name: str) -> bool:
         try:
             return bool(await es.indices.exists(index=idx_name))
         except Exception:
             return False
 
-    # 1) Prefer user_products index (if present)
     if await index_exists("user_products"):
         try:
-            # try to find a direct doc with user_id as id (common for single-doc-per-user)
             try:
                 up_get = await es.get(index="user_products", id=user_id)
                 up_doc = up_get.get("_source")
                 if up_doc:
                     logger.info("DASHBOARD: found user_products doc by id for user %s", user_id)
-                    # extract product ids from up_doc.products array if present
                     if isinstance(up_doc.get("products"), list):
                         product_ids = [p.get("product_id") for p in up_doc["products"] if p.get("product_id")]
                 else:
                     product_ids = []
             except Exception:
-                # not found by id — fallback to search by user_id field
                 user_prod_resp = await es.search(index="user_products", body={
                     "size": 1000,
                     "query": {"term": {"user_id.keyword": user_id}}
                 })
                 hits = user_prod_resp.get("hits", {}).get("hits", [])
                 logger.info("DASHBOARD: user_products search hits=%d", len(hits))
-                # two shapes possible: hits with _source.product_id OR _source.products array
                 ids = []
                 for h in hits:
-                    src = h.get("_source", {})
+                    src = h.get("_source", {}) or {}
                     if src.get("product_id"):
                         ids.append(src.get("product_id"))
                     elif isinstance(src.get("products"), list):
@@ -318,7 +667,6 @@ async def dashboard_api(user_id: str):
             logger.exception("DASHBOARD: error reading user_products: %s", e)
             product_ids = []
 
-    # 2) If still empty, fall back to PRODUCT_INDEX by user_id (legacy)
     if not product_ids:
         try:
             prod_resp = await es.search(index=PRODUCT_INDEX, body={
@@ -327,7 +675,6 @@ async def dashboard_api(user_id: str):
             })
             prod_hits = prod_resp.get("hits", {}).get("hits", [])
             logger.info("DASHBOARD: PRODUCT_INDEX hits=%d", len(prod_hits))
-            # collect product source docs (if they already store the canonical metadata)
             products = [h.get("_source") for h in prod_hits if h.get("_source")]
             product_ids = [p.get("product_id") for p in products if p.get("product_id")]
         except Exception as e:
@@ -335,7 +682,6 @@ async def dashboard_api(user_id: str):
             products = []
             product_ids = []
 
-    # 3) If product_ids were found via user_products but we don't yet have products, mget canonical docs
     if product_ids and not products:
         try:
             dedup_ids = list(dict.fromkeys([pid for pid in product_ids if pid]))
@@ -348,12 +694,10 @@ async def dashboard_api(user_id: str):
             logger.exception("DASHBOARD: error during mget PRODUCT_INDEX: %s", e)
             products = []
 
-    # If still no product_ids, return empty result
     if not product_ids:
         logger.info("DASHBOARD: no product ids found for user %s", user_id)
         return {"products": products, "price_history": []}
 
-    # 4) Fetch price history for discovered product_ids (normalize afterwards)
     hist_query = {
         "size": 5000,
         "query": {"terms": {"product_id": list(set([pid for pid in product_ids if pid]))}}
@@ -367,16 +711,13 @@ async def dashboard_api(user_id: str):
         logger.exception("DASHBOARD: error fetching price_history: %s", e)
         raw_price_hits = []
 
-    # 5) Normalize price history rows
     normalized = []
     for src in raw_price_hits:
         r = dict(src or {})
-        # price
         price = r.get("price")
         if price is None:
             price = r.get("current_price") or r.get("value") or r.get("amount") or None
 
-        # scraped_at
         scraped_at = r.get("scraped_at")
         if not scraped_at:
             if r.get("date"):
@@ -400,7 +741,6 @@ async def dashboard_api(user_id: str):
             **{k: v for k, v in r.items() if k not in ("price", "current_price", "date", "ts", "timestamp", "scraped_at")}
         })
 
-    # 6) Sort ascending by scraped_at (unknown dates go last)
     def _key(it):
         s = it.get("scraped_at")
         try:
@@ -412,8 +752,6 @@ async def dashboard_api(user_id: str):
 
     logger.info("DASHBOARD: returning %d products and %d price_history rows", len(products), len(normalized))
     return {"products": products, "price_history": normalized}
-
-
 
 
 # -------------------------------
@@ -449,13 +787,13 @@ async def get_product_details(product_id: str):
         "scraped_data": product,
         "analysis": analysis
     }
-    
+
+
 @app.post("/analyze", status_code=202)
 async def enqueue_analysis(req: AnalyzeRequest):
     """
-    Send scraping result to Celery for Gemini analysis.
-    Uses celery_app.send_task so the API doesn't need the exact task module import path.
-    The Celery task must be registered with the name 'gemini.call_gemini' (or update the name below).
+    Prefer synchronous analysis call (fast path) — persist and return immediately.
+    If sync path fails (no key or provider error), fall back to enqueueing Celery.
     """
     task_id = str(uuid.uuid4())
 
@@ -467,19 +805,32 @@ async def enqueue_analysis(req: AnalyzeRequest):
         "current_price": req.current_price
     }
 
+    # Try sync call first if we have a configured Gemini endpoint/key
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", None)
+    GEMINI_ENDPOINT = os.getenv("GEMINI_ENDPOINT", None)
+    if GEMINI_API_KEY and GEMINI_ENDPOINT:
+        try:
+            analysis = await call_gemini_sync_and_persist(payload)
+            logger.info("Synchronous analysis done for task %s", task_id)
+            # normalize before returning to frontend
+            analysis = normalize_analysis_for_api(analysis)
+            return {
+                "task_id": task_id,
+                "status": "done",
+                "analysis": analysis
+            }
+        except Exception as e:
+            logger.warning("Synchronous Gemini call failed for %s, falling back to Celery: %s", task_id, e)
+
+    # Fallback: enqueue into Celery (existing behavior)
     try:
-        # send_task arguments:
-        # - name: the registered Celery task name (worker must register this)
-        # - args: positional arguments (we pass the payload)
-        # - kwargs: optional keyword args
-        # - queue: ensure it hits the gemini queue
         celery_app.send_task(
             name="gemini.call_gemini",
             args=[payload],
             queue="gemini",
-            kwargs={},
-            # optional: set routing_key or priority here if you use them
+            task_id=task_id,
         )
+        logger.info("Enqueued gemini task %s for product %s", task_id, req.product_id)
     except Exception as e:
         logger.exception("Failed to queue analysis job via Celery: %s", e)
         raise HTTPException(status_code=500, detail=f"Failed to queue analysis job: {e}")
@@ -491,22 +842,101 @@ async def enqueue_analysis(req: AnalyzeRequest):
     }
 
 
-
 @app.get("/analyze/result/{task_id}")
 async def get_analysis_result_endpoint(task_id: str):
     """
-    Fetch LLM analysis from Redis AND index into Elasticsearch.
+    Fetch LLM analysis, looking in this order:
+      1) Redis (hash-style scrape:analysis:<task_id> result or simple analysis:result:<task_id>)
+      2) Elasticsearch ANALYSIS_INDEX (maybe already indexed)
+      3) Celery result backend (if available and ready)
+    If found, normalize, index into ES (id=task_id) and return the analysis object.
     """
-    analysis = await get_analysis_result(task_id)
+    analysis = None
+    raw = None
 
+    # 1) Try Redis (both shapes)
+    try:
+        redis = await get_redis()
+        # Prefer hash-style (legacy)
+        try:
+            if hasattr(redis, "hGet"):
+                raw = await redis.hGet(f"scrape:analysis:{task_id}", "result")
+            elif hasattr(redis, "hget"):
+                raw = await redis.hget(f"scrape:analysis:{task_id}", "result")
+        except Exception:
+            raw = None
+
+        # fallback to simple GET
+        if not raw:
+            try:
+                if hasattr(redis, "get"):
+                    raw = await redis.get(f"analysis:result:{task_id}")
+            except Exception:
+                raw = None
+
+        if raw:
+            try:
+                analysis = json.loads(raw)
+            except Exception:
+                analysis = raw
+    except Exception as e:
+        logger.debug("Redis lookup error for analysis %s: %s", task_id, e)
+
+    # 2) If not in Redis, try Elasticsearch analysis index
+    if analysis is None:
+        try:
+            es = await get_es()
+            # try get by id first (analysis may be indexed with id==task_id)
+            try:
+                resp = await es.get(index=ANALYSIS_INDEX, id=task_id)
+                src = resp.get("_source") or {}
+                if src:
+                    analysis = src
+            except Exception:
+                # if get fails, try a search by task_id field
+                try:
+                    search_body = {
+                        "size": 1,
+                        "query": {"term": {"task_id.keyword": task_id}}
+                    }
+                    sresp = await es.search(index=ANALYSIS_INDEX, body=search_body)
+                    hits = sresp.get("hits", {}).get("hits", [])
+                    if hits:
+                        analysis = hits[0].get("_source")
+                except Exception as se:
+                    logger.debug("ES search error for analysis %s: %s", task_id, se)
+        except Exception as e:
+            logger.debug("Elasticsearch lookup error for analysis %s: %s", task_id, e)
+
+    # 3) Last resort: check Celery result backend (non-blocking)
+    if analysis is None:
+        try:
+            async_result = celery_app.AsyncResult(task_id)
+            if async_result.ready():
+                res = async_result.result
+                if res:
+                    analysis = res
+        except Exception as e:
+            logger.debug("Celery result backend lookup error for %s: %s", task_id, e)
+
+    # Not found anywhere => still not ready
     if analysis is None:
         raise HTTPException(status_code=404, detail="Analysis result not ready")
 
+    # Normalize analysis so frontend always gets a friendly shape
+    try:
+        analysis = normalize_analysis_for_api(analysis)
+    except Exception as e:
+        logger.exception("Normalization failed for analysis %s: %s", task_id, e)
+        # fallback to second normalizer
+        analysis = normalize_analysis_obj(analysis)
+
+    # Ensure we index the analysis into ES (id=task_id) so subsequent reads are fast.
     try:
         await index_analysis_result(task_id, analysis)
     except Exception as e:
+        # don't hide the analysis from the frontend if indexing fails; log and continue
         logger.exception("Failed to index analysis result %s: %s", task_id, e)
-        raise HTTPException(status_code=500, detail=f"Failed to index analysis: {e}")
 
     return {"task_id": task_id, "analysis": analysis}
 
@@ -654,20 +1084,13 @@ def root():
         "message": "Scrape → Analyze → Index pipeline is active"
     }
 
+
 @app.get("/user/products")
 async def get_user_products(user_id: str):
-    """
-    Returns product metadata list belonging to a specific user.
-    Supports multiple shapes in user_products index:
-      - single doc with id == user_id and _source.products = [{product_id, added_at}, ...]
-      - multiple docs with _source.product_id and user_id field
-    Will mget canonical product docs from PRODUCT_INDEX if available.
-    """
     es = await get_es()
     products = []
 
     try:
-        # 1) Try get by id (single-doc-per-user pattern)
         try:
             up_get = await es.get(index="user_products", id=user_id)
             up_src = up_get.get("_source") or {}
@@ -675,11 +1098,9 @@ async def get_user_products(user_id: str):
             if isinstance(up_src.get("products"), list):
                 product_ids = [p.get("product_id") for p in up_src["products"] if p.get("product_id")]
             else:
-                # fall back to legacy single docs pattern
                 if up_src.get("product_id"):
                     product_ids = [up_src.get("product_id")]
         except Exception:
-            # not found by id -> search user_products by user_id field
             product_ids = []
             try:
                 resp = await es.search(index="user_products", body={
@@ -694,10 +1115,8 @@ async def get_user_products(user_id: str):
                     elif isinstance(src.get("products"), list):
                         product_ids.extend([p.get("product_id") for p in src["products"] if p.get("product_id")])
             except Exception:
-                # ignore and continue to fallback below
                 product_ids = []
 
-        # 2) If we have product_ids, fetch canonical product docs from PRODUCT_INDEX
         if product_ids:
             dedup = list(dict.fromkeys([pid for pid in product_ids if pid]))
             if dedup:
@@ -705,7 +1124,6 @@ async def get_user_products(user_id: str):
                 docs = mget_resp.get("docs", [])
                 products = [d.get("_source") for d in docs if d.get("found") and d.get("_source")]
         else:
-            # 3) As a last resort, search PRODUCT_INDEX for docs with user_id (legacy)
             resp = await es.search(index=PRODUCT_INDEX, body={
                 "size": 300,
                 "query": {"term": {"user_id.keyword": user_id}},
