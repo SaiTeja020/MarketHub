@@ -99,6 +99,13 @@ export async function scrapeProduct(
           error: `scrape_failed: ${errMsg}`,
         };
       }
+      
+      // Force restart the browser if a Playwright action failed
+      try {
+        const { restartBrowser } = await import("./browserPool");
+        await restartBrowser();
+      } catch (poolErr) {}
+
       // exponential-ish backoff
       await delay(DEFAULT_DELAY_MS * attempt);
     }

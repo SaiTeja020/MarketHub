@@ -4,13 +4,13 @@ import { scrapeAmazon } from "./sources/amazon";
 import { scrapeFlipkart } from "./sources/flipkart";
 
 export async function runScraper(url: string) {
-  url = url.toLowerCase();
+  const urlLower = url.toLowerCase();
 
-  if (url.includes("amazon")) {
+  if (urlLower.includes("amazon")) {
     return await scrapeAmazon(url);
   }
 
-  if (url.includes("flipkart")) {
+  if (urlLower.includes("flipkart")) {
     return await scrapeFlipkart(url);
   }
 

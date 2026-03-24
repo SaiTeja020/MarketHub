@@ -109,9 +109,11 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - RABBIT_URL=amqp://admin:admin@rabbitmq:5672//
       - ELASTIC_URL=http://elasticsearch:9200
-      - NODE_SCRAPER_URL=http://scraper:4000
+      - NODE_SCRAPER_URL=http://node_app:4000
       - DATABASE_URL=postgresql://postgres.sfdzwhjgegdtlndsepxs:MarketHubPS853@aws-1-ap-northeast-1.pooler.supabase.com:6543/postgres?sslmode=require
     restart: always
+    volumes:
+      - ./backend/python:/app
 
   scraper:
     build:

@@ -115,8 +115,8 @@ app.get("/", (req, res) => {
   res.json({ status: "node_api_running", port: PORT });
 });
 
-// Primary enqueue endpoint (POST { task_id, url, ... })
-app.post("/enqueue", async (req, res) => {
+// Shared enqueue handler used by both /enqueue and /scrape
+async function handleEnqueue(req, res) {
   const payload = req.body;
   if (!payload || (!payload.task_id && !payload.url && !payload.id)) {
     res.status(400).json({ status: "error", message: "Missing task payload (expecting task_id or url)" });
@@ -134,18 +134,19 @@ app.post("/enqueue", async (req, res) => {
     } catch (rerr) {
       warn("Failed to write Redis marker:", rerr?.message || rerr);
     }
-    res.json({ status: "ok", queued: true });
+    // Return 202 Accepted (FastAPI expects this status code)
+    res.status(202).json({ status: "ok", queued: true });
   } catch (err) {
     error("ENQUEUE_ERROR:", err?.stack || err);
     res.status(500).json({ status: "error", message: err?.message || String(err) });
   }
-});
+}
+
+// Primary enqueue endpoint (POST { task_id, url, ... })
+app.post("/enqueue", handleEnqueue);
 
 // Also provide a /scrape alias because some code expects it
-app.post("/scrape", async (req, res) => {
-  // reuse same logic
-  return app._router.handle(req, res, () => {});
-});
+app.post("/scrape", handleEnqueue);
 
 // Convenience endpoint to publish a test message (for manual use)
 app.post("/publish-test", async (req, res) => {

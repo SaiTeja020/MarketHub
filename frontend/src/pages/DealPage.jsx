@@ -38,6 +38,8 @@ export default function DealPage() {
     return () => clearInterval(interval);
   }, [taskId]);
 
+
+
   // Step 3: Trigger analysis
   async function startProductAnalysis() {
     const data = await startAnalysis({
@@ -102,12 +104,6 @@ export default function DealPage() {
         <div className="mt-6 border p-4 rounded bg-gray-50">
           <h2 className="text-lg font-semibold">{scraped.title}</h2>
           <p>Price: {scraped.current_price}</p>
-          <button
-            onClick={startProductAnalysis}
-            className="bg-green-600 text-white mt-3 px-4 py-2 rounded"
-          >
-            Analyze Deal
-          </button>
         </div>
       )}
 

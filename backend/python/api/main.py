@@ -55,8 +55,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Important: default should match the node service / port in docker-compose.
-NODE_SCRAPER_URL = os.getenv("NODE_SCRAPER_URL", "http://node_app:4000").rstrip("/")
+# Important: default uses localhost for local dev; docker-compose overrides via env var.
+NODE_SCRAPER_URL = os.getenv("NODE_SCRAPER_URL", "http://localhost:4000").rstrip("/")
 
 # -------------------------------
 # Models
@@ -499,7 +499,7 @@ async def add_user_product(req: TrackProductRequest):
     }
 
     try:
-        await es.index(index=PRODUCT_INDEX, id=user_doc_id, document=user_doc)
+        await es.index(index=PRODUCT_INDEX, id=user_doc_id, document=user_doc, refresh=True)
     except Exception as e:
         logger.exception("Failed to add tracking doc %s: %s", user_doc_id, e)
         raise HTTPException(status_code=500, detail=f"Failed to add product: {e}")
@@ -523,6 +523,22 @@ async def add_user_product(req: TrackProductRequest):
         scrape_queued = False
 
     return {"status": "success", "product": user_doc, "scrape_queued": scrape_queued, "task_id": payload["task_id"] if scrape_queued else None}
+
+
+@app.delete("/user/remove_product/{user_id}/{product_id}")
+async def remove_user_product(user_id: str, product_id: str):
+    es = await get_es()
+    user_doc_id = f"{user_id}-{product_id}"
+    
+    try:
+        await es.delete(index=PRODUCT_INDEX, id=user_doc_id, refresh=True)
+        return {"status": "success", "message": "Product removed successfully"}
+    except NotFoundError:
+        # It's already gone or doesn't exist
+        return {"status": "success", "message": "Product already removed or not found"}
+    except Exception as e:
+        logger.exception("Failed to remove tracking doc %s: %s", user_doc_id, e)
+        raise HTTPException(status_code=500, detail=f"Failed to remove product: {e}")
 
 
 # -------------------------------
@@ -667,21 +683,6 @@ async def dashboard_api(user_id: str):
             logger.exception("DASHBOARD: error reading user_products: %s", e)
             product_ids = []
 
-    if not product_ids:
-        try:
-            prod_resp = await es.search(index=PRODUCT_INDEX, body={
-                "size": 200,
-                "query": {"term": {"user_id.keyword": user_id}}
-            })
-            prod_hits = prod_resp.get("hits", {}).get("hits", [])
-            logger.info("DASHBOARD: PRODUCT_INDEX hits=%d", len(prod_hits))
-            products = [h.get("_source") for h in prod_hits if h.get("_source")]
-            product_ids = [p.get("product_id") for p in products if p.get("product_id")]
-        except Exception as e:
-            logger.exception("DASHBOARD: error searching PRODUCT_INDEX by user_id: %s", e)
-            products = []
-            product_ids = []
-
     if product_ids and not products:
         try:
             dedup_ids = list(dict.fromkeys([pid for pid in product_ids if pid]))
@@ -693,6 +694,26 @@ async def dashboard_api(user_id: str):
         except Exception as e:
             logger.exception("DASHBOARD: error during mget PRODUCT_INDEX: %s", e)
             products = []
+
+    # Always search PRODUCT_INDEX for products directly associated with the user
+    try:
+        prod_resp = await es.search(index=PRODUCT_INDEX, body={
+            "size": 200,
+            "query": {"match": {"user_id": user_id}}
+        })
+        prod_hits = prod_resp.get("hits", {}).get("hits", [])
+        logger.info("DASHBOARD: PRODUCT_INDEX hits=%d", len(prod_hits))
+        dynamic_products = [h.get("_source") for h in prod_hits if h.get("_source")]
+        
+        # Merge with any existing products (e.g., from user_products fixture)
+        existing_ids = {p.get("product_id") for p in products if p.get("product_id")}
+        for dp in dynamic_products:
+            if dp.get("product_id") not in existing_ids:
+                products.append(dp)
+                existing_ids.add(dp.get("product_id"))
+                product_ids.append(dp.get("product_id"))
+    except Exception as e:
+        logger.exception("DASHBOARD: error searching PRODUCT_INDEX by user_id: %s", e)
 
     if not product_ids:
         logger.info("DASHBOARD: no product ids found for user %s", user_id)
@@ -1123,13 +1144,21 @@ async def get_user_products(user_id: str):
                 mget_resp = await es.mget(body={"ids": dedup}, index=PRODUCT_INDEX)
                 docs = mget_resp.get("docs", [])
                 products = [d.get("_source") for d in docs if d.get("found") and d.get("_source")]
-        else:
+
+        try:
             resp = await es.search(index=PRODUCT_INDEX, body={
                 "size": 300,
-                "query": {"term": {"user_id.keyword": user_id}},
-                "sort": [{"scraped_at": {"order": "desc"}}]
+                "query": {"match": {"user_id": user_id}}
             })
-            products = [h.get("_source") for h in resp.get("hits", {}).get("hits", []) if h.get("_source")]
+            dynamic_products = [h.get("_source") for h in resp.get("hits", {}).get("hits", []) if h.get("_source")]
+
+            existing_ids = {p.get("product_id") for p in products if p.get("product_id")}
+            for dp in dynamic_products:
+                if dp.get("product_id") not in existing_ids:
+                    products.append(dp)
+                    existing_ids.add(dp.get("product_id"))
+        except Exception as e:
+            logger.exception("get_user_products dynamic products search error: %s", e)
 
         return {"products": products}
     except Exception as e:

@@ -1,0 +1,54 @@
+{ "index": { "_index": "products", "_id": "prod-1001" } }
+{ "product_id":"prod-1001","title":"Wireless Pro Gaming Controller","source":"amazon","url":"https://www.amazon.in/PowerA-Controller-Thumbsticks-Mechanical-Customizable/dp/B0D8TB5MM8/ref=sr_1_2_sspa?crid=X9XALA11ZJ6J&dib=eyJ2IjoiMSJ9.c9JNCABeGgXUZ66-ycTD1f7DOgt71Sb_MLy0PfnBdhnyx0dBaVscvkmLRBihi1FVObMqnl0p-dciMRhI_zeZucc98dg7N3s28UbNZTin4B5OVKWv3YM0UzzUqzSIInYbeU3yViimH2_Wy0ETcgFWcfyab0twonHttCvYo544BgBT95-_Ry2fKt1IAhRnMaUCo7vKjqs02P7ESKO5dH2L9yte-TdxnIVJWxKrgsdighY.FmQLUDMP0BoJSftTgGJoKxCgjGUYwcY-DawsLbvg7kE&dib_tag=se&keywords=wireless%2Bpro%2Bgaming%2Bcontroller&qid=1765168847&sprefix=wireless%2Bpro%2Bgaming%2Bcontrolle%2Caps%2C2063&sr=8-2-spons&aref=sJmHpkdVYK&sp_csd=d2lkZ2V0TmFtZT1zcF9hdGY&th=1","image_url":"https://m.media-amazon.com/images/I/41F2WdqDHzL._SX342_SY445_QL70_FMwebp_.jpg","currency":"INR","created_at":"2025-12-07T18:00:00Z" }
+{ "index": { "_index": "products", "_id": "prod-2002" } }
+{ "product_id":"prod-2002","title":"OverEar Bluetooth Headphones Q20i","source":"amazon","url":"https://www.amazon.in/soundcore-Bluetooth-Headphones-Cancelling-Personalization/dp/B0C3HCD34R/ref=sr_1_1_sspa?crid=1IFRHP8O6FSVE&dib=eyJ2IjoiMSJ9.HvKKyJH-6Ij1HTcQpHcDDO6G3_dd73i4hm8PuV1YteKWLZqhuEA2aMBKeN0JPx4FC-fhGdfUl_7WTut-GQR538CgvmLbXmMJiVyKFW-toNNjJQdk_QOv9ys7LWE0tTSkpn7rMB-m23PMifU2pVhk-V8fm90upa1ZVXGmb1-kNx8zD9qp2ibprnrbYyfIrM5gRW_Ee_GNVDFAoPdVdQc0VXDuBdZBqtzV0m0HF9SPyYk.mqpdjkveq9oqwoqxa6xQ6RCsCsfd7XEGB4gJpQUkpmo&dib_tag=se&keywords=OverEar%2BBluetooth%2BHeadphones%2BX200&qid=1765168926&sprefix=overear%2Bbluetooth%2Bheadphones%2Bx200%2Caps%2C341&sr=8-1-spons&aref=Wlfz3eL7vH&sp_csd=d2lkZ2V0TmFtZT1zcF9hdGY&th=1","image_url":"https://m.media-amazon.com/images/I/51CnDMbXZzL._SY879_.jpg","currency":"INR","created_at":"2025-12-07T17:45:00Z" }
+{ "index": { "_index": "products", "_id": "prod-3003" } }
+{ "product_id":"prod-3003","title":"750ml Stainless Steel Water Bottle","source":"amazon","url":"https://www.amazon.in/PEXPO-Certified-Stainless-Grey-Black-friendly/dp/B0DRCT1MTK/ref=sr_1_1_sspa?crid=ZGBQ6YVC6K68&dib=eyJ2IjoiMSJ9.Zkwrqon1An36GCbpE7KGH-Y8xy17fmVWYlR9v56VV9NG7w2JvqpHcyzojvfF4T5qmvQ6EuDtYxM7TavR9cBihy2YdxA7hqupaubtDECzsg8jaehYshPCo-jWR2q-EfkHqtSTQfRyvFQY-LbUDFlgBwr56kQVukmTe6ReRCOmiWI1i9XAw7UaeCiwkBC90gocHtcNSudqPmXST4TtrgQVhK-H1BXKFZeu51NfoveR_0DqtE8owAlPR2zrcZH_SyXfmqNeBPBRVaWguFqBFqI2W5V7UqmxMD9Bm44UkwfJ86s.Kf8Jvyy7cEY8iCORnHncCMiFnoklhHEIJ8V92JX26B0&dib_tag=se&keywords=750ml%2Bstainless%2Bsteel%2Bwater%2Bbottle&qid=1765169003&sprefix=750ml%2Bstainless%2Bsteel%2Bwater%2Bbottle%2Caps%2C288&sr=8-1-spons&aref=ksIYf5NQLR&sp_csd=d2lkZ2V0TmFtZT1zcF9hdGY&th=1","image_url":"https://m.media-amazon.com/images/I/61iaLF1gynL._SX679_.jpg","currency":"INR","created_at":"2025-12-07T16:20:00Z" }
+
+{ "index": { "_index": "user_products", "_id": "aa6510f1-9697-4847-9794-da225eb1caa7" } }
+{ "user_id":"49fe825a-afb8-4db0-be85-83adbf12ef16","products":[{"product_id":"prod-1001","added_at":"2025-12-07T18:01:00Z"},{"product_id":"prod-2002","added_at":"2025-12-07T17:46:00Z"},{"product_id":"prod-3003","added_at":"2025-12-07T16:21:00Z"}],"updated_at":"2025-12-07T18:05:00Z" }
+
+{ "index": { "_index": "price_history", "_id": "prod-1001_2025-12-01" } }
+{ "product_id":"prod-1001","date":"2025-12-01","price":4299,"currency":"INR" }
+{ "index": { "_index": "price_history", "_id": "prod-1001_2025-12-02" } }
+{ "product_id":"prod-1001","date":"2025-12-02","price":4199,"currency":"INR" }
+{ "index": { "_index": "price_history", "_id": "prod-1001_2025-12-03" } }
+{ "product_id":"prod-1001","date":"2025-12-03","price":3999,"currency":"INR" }
+{ "index": { "_index": "price_history", "_id": "prod-1001_2025-12-04" } }
+{ "product_id":"prod-1001","date":"2025-12-04","price":3899,"currency":"INR" }
+{ "index": { "_index": "price_history", "_id": "prod-1001_2025-12-05" } }
+{ "product_id":"prod-1001","date":"2025-12-05","price":3799,"currency":"INR" }
+{ "index": { "_index": "price_history", "_id": "prod-1001_2025-12-06" } }
+{ "product_id":"prod-1001","date":"2025-12-06","price":3799,"currency":"INR" }
+{ "index": { "_index": "price_history", "_id": "prod-1001_2025-12-07" } }
+{ "product_id":"prod-1001","date":"2025-12-07","price":3799,"currency":"INR" }
+
+{ "index": { "_index": "price_history", "_id": "prod-2002_2025-12-01" } }
+{ "product_id":"prod-2002","date":"2025-12-01","price":2499,"currency":"INR" }
+{ "index": { "_index": "price_history", "_id": "prod-2002_2025-12-02" } }
+{ "product_id":"prod-2002","date":"2025-12-02","price":2399,"currency":"INR" }
+{ "index": { "_index": "price_history", "_id": "prod-2002_2025-12-03" } }
+{ "product_id":"prod-2002","date":"2025-12-03","price":2299,"currency":"INR" }
+{ "index": { "_index": "price_history", "_id": "prod-2002_2025-12-04" } }
+{ "product_id":"prod-2002","date":"2025-12-04","price":2199,"currency":"INR" }
+{ "index": { "_index": "price_history", "_id": "prod-2002_2025-12-05" } }
+{ "product_id":"prod-2002","date":"2025-12-05","price":2199,"currency":"INR" }
+{ "index": { "_index": "price_history", "_id": "prod-2002_2025-12-06" } }
+{ "product_id":"prod-2002","date":"2025-12-06","price":2199,"currency":"INR" }
+{ "index": { "_index": "price_history", "_id": "prod-2002_2025-12-07" } }
+{ "product_id":"prod-2002","date":"2025-12-07","price":2199,"currency":"INR" }
+
+{ "index": { "_index": "price_history", "_id": "prod-3003_2025-12-01" } }
+{ "product_id":"prod-3003","date":"2025-12-01","price":799,"currency":"INR" }
+{ "index": { "_index": "price_history", "_id": "prod-3003_2025-12-02" } }
+{ "product_id":"prod-3003","date":"2025-12-02","price":749,"currency":"INR" }
+{ "index": { "_index": "price_history", "_id": "prod-3003_2025-12-03" } }
+{ "product_id":"prod-3003","date":"2025-12-03","price":699,"currency":"INR" }
+{ "index": { "_index": "price_history", "_id": "prod-3003_2025-12-04" } }
+{ "product_id":"prod-3003","date":"2025-12-04","price":699,"currency":"INR" }
+{ "index": { "_index": "price_history", "_id": "prod-3003_2025-12-05" } }
+{ "product_id":"prod-3003","date":"2025-12-05","price":699,"currency":"INR" }
+{ "index": { "_index": "price_history", "_id": "prod-3003_2025-12-06" } }
+{ "product_id":"prod-3003","date":"2025-12-06","price":649,"currency":"INR" }
+{ "index": { "_index": "price_history", "_id": "prod-3003_2025-12-07" } }
+{ "product_id":"prod-3003","date":"2025-12-07","price":649,"currency":"INR" }

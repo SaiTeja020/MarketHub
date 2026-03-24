@@ -516,13 +516,7 @@ export default function AnalyticsPage() {
           </div>
 
           <div>
-            <button
-              onClick={handleAnalyzeClick}
-              disabled={analyzing}
-              className="px-4 py-2 bg-indigo-600 text-white rounded shadow"
-            >
-              {analyzing ? "Analyzing…" : "Analyze Deal"}
-            </button>
+            
           </div>
         </div>
       </div>
@@ -573,13 +567,11 @@ export default function AnalyticsPage() {
         <div className="bg-white rounded-lg shadow-sm p-6 space-y-4">
           {/* Analysis summary panel */}
           <div>
-            <h3 className="text-sm text-gray-600 mb-2">Price Analysis</h3>
+            
 
             {analysisError && <div className="text-red-600 text-sm mb-2">{analysisError}</div>}
 
-            {!analysisSummary && !analysisError && (
-              <div className="text-sm text-gray-500">No analysis yet — click "Analyze Deal" to run it.</div>
-            )}
+            
 
             {analysisSummary && (
               <div className="p-3 bg-gray-50 rounded border">

@@ -448,9 +448,18 @@ export async function callLLMFallback(
           console.error("❌ Failed to write scrape result to Redis:", redisErr);
         }
 
-        // Optional: index into Elasticsearch here from Node if desired.
-        // If you want that, add an index function and call it:
-        // try { await indexScrapedProduct(result); } catch (e) { console.warn("Failed to index product in Node:", e); }
+        // Trigger Python backend to index the result into Elasticsearch and Price History
+        try {
+          const fetch = (await import("node-fetch")).default;
+          const webhookUrl = `http://fastapi_app:8000/scrape/result/${task_id}`;
+          console.log(`Webhooking Python backend to index result: ${webhookUrl}`);
+          const res = await fetch(webhookUrl);
+          if (!res.ok) {
+            console.error(`Webhook failed with status ${res.status}:`, await res.text());
+          }
+        } catch (webhookErr) {
+          console.warn("Failed to trigger indexing webhook:", webhookErr);
+        }
 
         const duration = ((Date.now() - started) / 1000).toFixed(3);
         console.log(`SCRAPE_DONE id=${task_id} duration_s=${duration} ts=${new Date().toISOString()}`);
